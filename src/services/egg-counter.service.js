@@ -1,7 +1,7 @@
 'use strict';
 
-const { spawn } = require('child_process');
-const path      = require('path');
+const { spawn, spawnSync } = require('child_process');
+const path                 = require('path');
 
 /**
  * EggCounterService
@@ -33,6 +33,26 @@ class EggCounterService {
   );
 
   /**
+   * Resuelve el binario de Python disponible en el entorno.
+   * Prioridad: PYTHON_BIN env var → python3 → python
+   *
+   * @returns {string} Nombre del ejecutable de Python.
+   */
+  static resolvePythonBin() {
+    // Si el usuario configuró explícitamente la variable, respetarla.
+    if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+
+    // Detectar automáticamente cuál está disponible en el PATH.
+    for (const candidate of ['python3', 'python']) {
+      const result = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
+      if (result.status === 0) return candidate;
+    }
+
+    // Último recurso: asumir python3 (el error será descriptivo).
+    return 'python3';
+  }
+
+  /**
    * Cuenta los huevos que cruzan la línea de conteo en el video.
    * Invoca el script Python y parsea su salida JSON desde stdout.
    *
@@ -41,7 +61,7 @@ class EggCounterService {
    */
   async countEggs(videoPath) {
     return new Promise((resolve, reject) => {
-      const pythonBin = process.env.PYTHON_BIN || 'python3';
+      const pythonBin = EggCounterService.resolvePythonBin();
 
       const scriptArgs = [
         EggCounterService.PYTHON_SCRIPT_PATH,
