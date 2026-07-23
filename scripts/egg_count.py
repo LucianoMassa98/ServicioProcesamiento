@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 egg_count.py  –  Conteo de huevos marrones en cinta transportadora.
 
@@ -184,7 +185,7 @@ def separate_blobs_watershed(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
                 centroids.append((cx, cy))
 
     return centroids
-nte dentro del blob (dist > umbral mínimo)
+    # nte dentro del blob (dist > umbral mínimo)
     min_dist_thr = max(4.0, APPROX_EGG_RADIUS_PX * 0.4)
     local_max    = np.uint8(
         (dist >= dist_dil * 0.92) & (dist > min_dist_thr)
