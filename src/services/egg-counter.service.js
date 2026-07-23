@@ -1,91 +1,116 @@
 'use strict';
 
+const { spawn } = require('child_process');
+const path      = require('path');
+
 /**
  * EggCounterService
  *
  * Responsabilidad única: contar huevos en un video dado su ruta.
  *
- * DISEÑO PARA EXTENSIBILIDAD:
- * ─────────────────────────────────────────────────────────────────────────────
- * Esta clase sigue el principio Open/Closed (SOLID).
- * Para reemplazar el algoritmo por un modelo YOLO (Ultralytics) u otro,
- * basta con modificar únicamente el cuerpo del método `countEggs()` o
- * crear una subclase/estrategia que implemente la misma interfaz:
+ * IMPLEMENTACIÓN ACTUAL: OpenCV (Python) via child_process.
+ *   - Detecta huevos marrones por color HSV + Watershed para grupos.
+ *   - Rastrea centroides frame a frame.
+ *   - Cuenta cada huevo la primera vez que cruza la línea horizontal.
  *
+ * Para migrar a YOLO en el futuro, solo hace falta:
+ *   1. Cambiar PYTHON_SCRIPT_PATH por el nuevo script.
+ *   2. O crear una subclase que sobreescriba countEggs().
+ *   VideoAnalysisService NO necesita cambios (DIP).
+ *
+ * Interfaz pública:
  *   countEggs(videoPath: string): Promise<{ eggs, processedFrames, processingTime }>
- *
- * VideoAnalysisService NO necesita cambios.
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * TODO: Reemplazar la implementación stub por OpenCV + YOLO cuando el
- *       modelo esté disponible. Ver comentarios internos para guía.
  */
 class EggCounterService {
   /**
+   * Ruta al script Python de conteo.
+   * Relativa a la raíz del proyecto (process.cwd()).
+   */
+  static PYTHON_SCRIPT_PATH = path.join(
+    path.resolve(__dirname, '../../'),
+    'scripts',
+    'egg_count.py',
+  );
+
+  /**
    * Cuenta los huevos que cruzan la línea de conteo en el video.
+   * Invoca el script Python y parsea su salida JSON desde stdout.
    *
    * @param {string} videoPath - Ruta absoluta al archivo de video temporal.
    * @returns {Promise<{ eggs: number, processedFrames: number, processingTime: number }>}
    */
   async countEggs(videoPath) {
-    const startTime = Date.now();
+    return new Promise((resolve, reject) => {
+      const pythonBin = process.env.PYTHON_BIN || 'python3';
 
-    // ─── IMPLEMENTACIÓN FUTURA CON YOLO ───────────────────────────────────
-    //
-    // Ejemplo de integración con YOLO (Python vía child_process o binding nativo):
-    //
-    // const { spawn } = require('child_process');
-    // return new Promise((resolve, reject) => {
-    //   const process = spawn('python3', ['scripts/yolo_count.py', videoPath]);
-    //   let output = '';
-    //   process.stdout.on('data', (data) => { output += data.toString(); });
-    //   process.on('close', (code) => {
-    //     if (code !== 0) return reject(new Error('YOLO script failed'));
-    //     const result = JSON.parse(output);
-    //     resolve(result);
-    //   });
-    // });
-    //
-    // ─── IMPLEMENTACIÓN FUTURA CON OPENCV (node-opencv o @u4/opencv4nodejs) ─
-    //
-    // const cv = require('@u4/opencv4nodejs');
-    // const cap = new cv.VideoCapture(videoPath);
-    // let frameCount = 0;
-    // let eggCount = 0;
-    //
-    // while (true) {
-    //   const frame = cap.read();
-    //   if (frame.empty) break;
-    //   frameCount++;
-    //   // Aplicar detección y lógica de línea de conteo aquí
-    // }
-    //
-    // cap.release();
-    // ──────────────────────────────────────────────────────────────────────
+      const scriptArgs = [
+        EggCounterService.PYTHON_SCRIPT_PATH,
+        videoPath,
+        '--line-ratio',       process.env.EGG_COUNTING_LINE_RATIO    || '0.65',
+        '--min-area',         process.env.EGG_MIN_AREA                || '600',
+        '--max-area',         process.env.EGG_MAX_AREA                || '18000',
+        '--skip-frames',      process.env.EGG_PROCESS_EVERY_N_FRAMES  || '2',
+        '--max-dist',         process.env.EGG_MAX_CENTROID_DIST       || '90',
+        '--min-track-frames', process.env.EGG_MIN_TRACK_FRAMES        || '4',
+        '--max-lost-frames',  process.env.EGG_MAX_LOST_FRAMES         || '10',
+      ];
 
-    // ─── STUB: valores simulados para desarrollo y testing ────────────────
-    // Simula procesamiento asíncrono (eliminar en producción)
-    await this._simulateProcessing(videoPath);
+      console.log(`[EggCounterService] Iniciando: ${pythonBin} ${scriptArgs.join(' ')}`);
 
-    const processingTime = parseFloat(((Date.now() - startTime) / 1000).toFixed(2));
+      const proc = spawn(pythonBin, scriptArgs);
 
-    return {
-      eggs: 0,              // Reemplazar con el conteo real del algoritmo
-      processedFrames: 0,   // Reemplazar con el total de frames procesados
-      processingTime,
-    };
-    // ──────────────────────────────────────────────────────────────────────
-  }
+      let stdout = '';
+      let stderr = '';
 
-  /**
-   * Simula una demora de procesamiento.
-   * ELIMINAR cuando se implemente el algoritmo real.
-   *
-   * @private
-   * @param {string} _videoPath
-   */
-  async _simulateProcessing(_videoPath) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+      proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+      proc.on('close', (code) => {
+        if (stderr.trim()) {
+          // stderr contiene logs de diagnóstico del script (no son errores fatales)
+          console.log(`[EggCounterService] Script stderr:\n${stderr.trim()}`);
+        }
+
+        if (code !== 0) {
+          return reject(
+            new Error(`egg_count.py terminó con código ${code}: ${stderr.trim()}`),
+          );
+        }
+
+        let result;
+        try {
+          result = JSON.parse(stdout.trim());
+        } catch {
+          return reject(
+            new Error(`No se pudo parsear la salida del script: "${stdout.trim()}"`),
+          );
+        }
+
+        if (result.error) {
+          return reject(new Error(result.error));
+        }
+
+        console.log(
+          `[EggCounterService] Resultado: eggs=${result.eggs} ` +
+          `frames=${result.processedFrames} time=${result.processingTime}s`,
+        );
+
+        resolve({
+          eggs:           result.eggs,
+          processedFrames: result.processedFrames,
+          processingTime:  result.processingTime,
+        });
+      });
+
+      proc.on('error', (err) => {
+        reject(
+          new Error(
+            `No se pudo iniciar "${pythonBin}". ` +
+            `¿Está Python instalado y en el PATH? Detalle: ${err.message}`,
+          ),
+        );
+      });
+    });
   }
 }
 
