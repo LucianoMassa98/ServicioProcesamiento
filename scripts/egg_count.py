@@ -27,7 +27,6 @@ Errores (stderr): mensajes de diagnóstico
 import sys
 import json
 import time
-import math
 import argparse
 
 import cv2
@@ -40,15 +39,16 @@ DEFAULT_LINE_RATIO       = 0.55   # línea al 55% del alto
 DEFAULT_MIN_AREA         = 800    # no usado en detección por distancia (solo filtro legacy)
 DEFAULT_MAX_AREA         = 22000  # no usado en detección por distancia (solo filtro legacy)
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
-DEFAULT_MAX_DIST         = 80     # distancia máxima px para asociar al mismo track
+DEFAULT_MAX_DIST         = 70     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 3      # frames mínimos rastreados antes de poder contar
 DEFAULT_MAX_LOST_FRAMES  = 60    # frames sin detección antes de eliminar track
                                    # (alto para tolerar pausas de la cinta)
 
 # Radio aproximado de un huevo en píxeles (vista cenital, frame 640x480).
-# Ajustar si la cámara cambia de altura o resolución.
-# π * r² ≈ 2000px²  →  r ≈ 25px
-APPROX_EGG_RADIUS_PX = 25
+# Huevos tienen ~30px de diámetro → ró ≈ 15px.
+# El kernel de supresión es 2*r+5 = 35px: suficiente para separar huevos tocados
+# (centros a ~30px) sin fusionar huevos distintos.
+APPROX_EGG_RADIUS_PX = 15
 
 
 # ─── Rango HSV para huevos naranja-marrones (cámara cenital) ─────────────────
@@ -127,29 +127,21 @@ def separate_blobs_watershed(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return markers
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-def detect_egg_centroids(frame: np.ndarray, min_area: int, max_area: int) -> list:
-    """
-    Detecta el centro de cada huevo individual en el frame.
-
-    Pipeline:
-      1. Máscara de color naranja-marrón sobre el ROI de la cinta.
-      2. Distance Transform: cada píxel toma el valor de su distancia al borde.
-         Los centros de huevo quedan como máximos locales.
-      3. Supresión de no-máximos con kernel de radio de un huevo:
-         en cada ventana del tamaño de un huevo solo queda UN máximo.
-      4. Cada máximo local = un huevo individual, incluso dentro de clusters.
-
-    Esta técnica evita el problema de blobs fusionados donde múltiples
-    huevos tocados se detectaban como un único centroide.
-    """
-    mask = build_egg_mask(frame)
+# ───────────────────────────────────────────────────────�    mask = build_egg_mask(frame)
 
     if cv2.countNonZero(mask) == 0:
         return []
 
+    # ── Operar solo sobre el bounding box de la máscara (optimización) ─────
+    # En lugar de procesar el frame completo (640×480), procesamos solo la
+    # región activa del ROI, reduciendo el tiempo de cómputo ~3×.
+    ys, xs = np.where(mask > 0)
+    y1_roi, y2_roi = int(ys.min()), int(ys.max()) + 1
+    x1_roi, x2_roi = int(xs.min()), int(xs.max()) + 1
+    mask_crop = mask[y1_roi:y2_roi, x1_roi:x2_roi]
+
     # ── Distance Transform ──────────────────────────────────────────────
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    dist = cv2.distanceTransform(mask_crop, cv2.DIST_L2, 5)
     # dist[y,x] = distancia del píxel (x,y) al borde más cercano
     # Centro de un huevo de radio R tiene dist ≈ R
 
@@ -157,14 +149,42 @@ def detect_egg_centroids(frame: np.ndarray, min_area: int, max_area: int) -> lis
     # Dilatamos con un kernel del tamaño aproximado de un huevo.
     # Tras la dilatación, cada píxel tiene el valor del máximo de su vecindad.
     # Los máximos locales son donde dist ≈ dist_dilated (son el máximo local).
-    kernel_diam = max(3, 2 * APPROX_EGG_RADIUS_PX + 5)   # dilámetro de búsqueda
+    kernel_diam = max(3, 2 * APPROX_EGG_RADIUS_PX + 5)   # diámetro de búsqueda
     dil_kernel  = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (kernel_diam, kernel_diam))
     dist_dil    = cv2.dilate(dist, dil_kernel)
 
     # Un máximo local es un píxel que:
-    #   a) Es prácticamente igual al máximo de su vecindad (dist ≥ 98% de dist_dil)
+    #   a) Es prácticamente igual al máximo de su vecindad (dist ≥ 92% de dist_dil)
     #   b) Está suficientemente dentro del blob (dist > umbral mínimo)
+    min_dist_thr = max(4.0, APPROX_EGG_RADIUS_PX * 0.4)
+    local_max    = np.uint8(
+        (dist >= dist_dil * 0.92) & (dist > min_dist_thr)
+    )
+
+    # Pequeña dilatación para unir máximos muy próximos del mismo huevo
+    merge_k   = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    local_max = cv2.dilate(local_max, merge_k, iterations=1)
+
+    # ── Extraer centroides de cada máximo local ───────────────────────────
+    n_labels, _, stats, cents = cv2.connectedComponentsWithStats(local_max)
+
+    centroids = []
+    h_crop, w_crop = mask_crop.shape[:2]
+    for i in range(1, n_labels):
+        cx_crop = int(cents[i][0])
+        cy_crop = int(cents[i][1])
+        # Verificar que el centroide esté dentro de la máscara y tenga
+        # distancia suficiente al borde (es un centro real, no ruido de borde)
+        if 0 <= cy_crop < h_crop and 0 <= cx_crop < w_crop:
+            if mask_crop[cy_crop, cx_crop] > 0 and dist[cy_crop, cx_crop] > min_dist_thr:
+                # Convertir coordenadas de vuelta al frame completo
+                cx = cx_crop + x1_roi
+                cy = cy_crop + y1_roi
+                centroids.append((cx, cy))
+
+    return centroids
+nte dentro del blob (dist > umbral mínimo)
     min_dist_thr = max(4.0, APPROX_EGG_RADIUS_PX * 0.4)
     local_max    = np.uint8(
         (dist >= dist_dil * 0.92) & (dist > min_dist_thr)
