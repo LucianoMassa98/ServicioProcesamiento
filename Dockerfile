@@ -1,0 +1,28 @@
+# ─── Imagen base con Node 20 + Python 3 ────────────────────────────────────
+FROM node:20-slim
+
+# Instalar Python 3, pip y dependencias de sistema necesarias para OpenCV
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ─── Dependencias Python ─────────────────────────────────────────────────────
+COPY scripts/requirements.txt ./scripts/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r scripts/requirements.txt
+
+# ─── Dependencias Node ───────────────────────────────────────────────────────
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# ─── Código fuente ───────────────────────────────────────────────────────────
+COPY . .
+
+EXPOSE 3000
+
+CMD ["node", "src/index.js"]
