@@ -2,3 +2,6 @@ node_modules/
 .env
 tmp/
 *.log
+# Large video files
+prueba/*.mp4
+*.mp4
