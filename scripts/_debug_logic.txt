@@ -1,0 +1,71 @@
+240:             prev_cy  = self.tracks[tid]['cy']
+241: 
+242:             self.tracks[tid]['cx']     = cx
+243:             self.tracks[tid]['cy']     = cy
+244:             self.tracks[tid]['frames'] += 1
+245:             self.tracks[tid]['lost']   = 0
+246: 
+247:             # ── Lógica de conteo ─────────────────────────────────────────────
+248:             if (not self.tracks[tid]['counted']
+249:                     and self.tracks[tid]['frames'] >= self.min_track_frames
+250:                     and prev_cy < self.line_y <= cy):
+251:                 self.tracks[tid]['counted'] = True
+252:                 self.egg_count += 1
+253: 
+254:         # Incrementar contador de frames perdidos para tracks sin match
+255:         for tid in list(self.tracks):
+256:             if tid not in used_tracks:
+257:                 self.tracks[tid]['lost'] += 1
+258: 
+259:         # Crear nuevos tracks para centroides sin asignar
+260:         for cidx, (cx, cy) in enumerate(centroids):
+261:             if cidx not in used_centroids:
+262:                 self.tracks[self._next_id] = {
+263:                     'cx': cx, 'cy': cy,
+264:                     'frames': 1,
+265:                     'counted': False,
+266:                     'lost': 0,
+267:                 }
+268:                 self._next_id += 1
+269: 
+270:         # Eliminar tracks obsoletos
+271:         self.tracks = {
+272:             tid: t for tid, t in self.tracks.items()
+273:             if t['lost'] <= self.max_lost_frames
+274:         }
+275: 
+276: 
+277: # ──────────────────────────────────────────────────────────────────────────────
+278: def main():
+279:     args       = parse_args()
+280:     start_time = time.time()
+281: 
+282:     cap = cv2.VideoCapture(args.video_path)
+283:     if not cap.isOpened():
+284:         print(json.dumps({'error': f'No se pudo abrir el video: {args.video_path}'}),
+285:               file=sys.stdout)
+286:         sys.exit(1)
+287: 
+288:     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+289:     line_y = int(height * args.line_ratio)
+290: 
+291:     print(f'[egg_count] line_y={line_y}px  video={args.video_path}',
+292:           file=sys.stderr)
+293: 
+294:     tracker = EggTracker(
+295:         line_y           = line_y,
+296:         max_dist         = args.max_dist,
+297:         min_track_frames = args.min_track_frames,
+298:         max_lost_frames  = args.max_lost_frames,
+299:     )
+300: 
+301:     frame_idx  = 0
+302:     processed  = 0
+303: 
+304:     while True:
+305:         ret, frame = cap.read()
+306:         if not ret:
+307:             break
+308: 
+309:         frame_idx += 1
+310:         if frame_idx % args.skip_frames != 0:

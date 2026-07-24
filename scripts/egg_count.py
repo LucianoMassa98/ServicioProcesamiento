@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-egg_count.py  –  Conteo de huevos marrones en cinta transportadora.
+egg_count.py  –  Conteo de huevos marrones en cadena transportadora.
 
 Algoritmo:
-  1. Convierte cada frame a HSV y aplica máscara para color marrón.
-  2. Aplica ROI centrado en la cinta (excluye bordes con color similar).
+  1. Convierte cada frame a HSV y aplica máscara para color naranja-marrón.
+  2. Aplica ROI sobre el área visible de la cadena (excluye bordes sin cadena).
   3. Usa Distance Transform + supresión de no-máximos para encontrar
      el centro de cada huevo individual, incluso dentro de clusters.
   4. Rastrea centroides entre frames (nearest-neighbour greedy).
   5. Cuenta cada huevo la primera vez que su centroide cruza
      la línea horizontal de conteo (movimiento de arriba→abajo).
-  6. Re-cuenta si el track se pierde y el huevo reaparece (ciclos de cinta).
+  6. Re-cuenta si el track se pierde y el huevo reaparece.
 
-Orientación de cámara: CENITAL (vista desde arriba, cinta vertical).
-  - La cinta ocupa el centro del frame (~25% a 75% del ancho).
+Orientación de cámara: LATERAL (vista desde el costado, cadena inclinada).
+  - La cadena traversa el frame de arriba a abajo con inclinación.
   - Los huevos se desplazan de la parte superior hacia la inferior.
-  - La cinta hace pausas: MAX_LOST_FRAMES es alto para no perder tracks.
+  - La cadena es continua: MAX_LOST_FRAMES moderado.
+  - El fondo muestra barras metálicas grises de la cadena.
 
 Uso:
   python egg_count.py <video_path> [opciones]
@@ -36,33 +37,33 @@ import numpy as np
 
 
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
-# CÁMARA CENITAL: la cinta ocupa el centro del frame, movimiento top→bottom.
-DEFAULT_LINE_RATIO       = 0.55   # línea al 55% del alto
-DEFAULT_MIN_AREA         = 800    # no usado en detección por distancia (solo filtro legacy)
-DEFAULT_MAX_AREA         = 22000  # no usado en detección por distancia (solo filtro legacy)
+# CÁMARA LATERAL: cadena inclinada, movimiento top→bottom.
+DEFAULT_LINE_RATIO       = 0.55   # línea al 55% del alto del frame
+DEFAULT_MIN_AREA         = 600    # no usado en detección por distancia (solo filtro legacy)
+DEFAULT_MAX_AREA         = 25000  # no usado en detección por distancia (solo filtro legacy)
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
-DEFAULT_MAX_DIST         = 80     # distancia máxima px para asociar al mismo track
+DEFAULT_MAX_DIST         = 90     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 3      # frames mínimos rastreados antes de poder contar
-DEFAULT_MAX_LOST_FRAMES  = 60    # frames sin detección antes de eliminar track
-                                   # (alto para tolerar pausas de la cinta)
+DEFAULT_MAX_LOST_FRAMES  = 20     # frames sin detección antes de eliminar track
+                                   # (moderado: la cadena lateral es continua)
 
-# Radio aproximado de un huevo en píxeles (vista cenital, frame 640x480).
-# Ajustar si la cámara cambia de altura o resolución.
-# π * r² ≈ 2000px²  →  r ≈ 25px
-APPROX_EGG_RADIUS_PX = 25
+# Radio aproximado de un huevo en píxeles (vista lateral, cadena inclinada).
+# Los huevos vistos de costado aparecen como elipses; r es el semi-eje mayor.
+# Ajustar si la distancia focal o la resolución cambian.
+APPROX_EGG_RADIUS_PX = 30
 
 
-# ─── Rango HSV para huevos naranja-marrones (cámara cenital) ─────────────────
-# Vista cenital: los huevos son muy saturados (S>130) y de tono naranja (H 8-18).
-# Las barras de la cinta son más amarillas (H >20) y la malla/pared quedan fuera del ROI.
-HSV_LOWER = np.array([ 8, 130,  60])
-HSV_UPPER = np.array([18, 255, 215])
+# ─── Rango HSV para huevos naranja-marrones (cámara lateral) ─────────────────
+# Vista lateral: la iluminación de costado reduce la saturación percibida y
+# puede aclarar el tono. Se amplía el rango respecto a la vista cenital.
+# Fondo: barras metálicas grises (baja saturación) → quedan fuera de la máscara.
+HSV_LOWER = np.array([ 5, 80,  60])
+HSV_UPPER = np.array([22, 255, 230])
 
-# ROI centrado en la cinta transportadora (vista cenital, frame 640x480).
-# La cinta ocupa aproximadamente el 25%–75% del ancho del frame.
-# Se excluyen los bordes con malla amarilla (izq) y pared amarilla (der).
-ROI_X_START_RATIO = float(0.25)   # inicio en X como fracción del ancho
-ROI_X_END_RATIO   = float(0.75)   # fin en X como fracción del ancho
+# ROI sobre la cadena lateral: la cadena ocupa casi todo el ancho del frame.
+# Se recortan pequeños márgenes para excluir artefactos de los bordes del encuadre.
+ROI_X_START_RATIO = float(0.05)   # inicio en X como fracción del ancho
+ROI_X_END_RATIO   = float(0.95)   # fin en X como fracción del ancho
 
 # Kernel morfológico elíptico para operaciones de limpieza
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
@@ -87,8 +88,10 @@ def build_egg_mask(frame: np.ndarray) -> np.ndarray:
     """
     Genera una máscara binaria de los píxeles con color de huevo naranja-marrón.
 
-    ROI centrado en X: excluye la malla amarilla (izquierda) y la pared
-    amarilla (derecha) que tienen color similar a los huevos.
+    ROI en X: cubre casi todo el ancho del frame (cámara lateral).
+    Excluye pequeños márgenes en los bordes del encuadre que pueden tener
+    reflejos o artefactos. Las barras metálicas grises de la cadena quedan
+    fuera de la máscara por su baja saturación HSV.
     Aplica cierre morfológico para rellenar huecos y apertura para quitar ruido.
     """
     h, w = frame.shape[:2]

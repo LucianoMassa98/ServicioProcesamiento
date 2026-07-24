@@ -1,0 +1,21 @@
+310:         if frame_idx % args.skip_frames != 0:
+311:             continue
+312: 
+313:         centroids = detect_egg_centroids(frame, args.min_area, args.max_area)
+314:         tracker.update(centroids)
+315:         processed += 1
+316: 
+317:     cap.release()
+318: 
+319:     elapsed = round(time.time() - start_time, 2)
+320:     result  = {
+321:         'eggs':           tracker.egg_count,
+322:         'processedFrames': processed,
+323:         'processingTime':  elapsed,
+324:     }
+325:     print(json.dumps(result))
+326: 
+327: 
+328: if __name__ == '__main__':
+329:     main()
+330: 
