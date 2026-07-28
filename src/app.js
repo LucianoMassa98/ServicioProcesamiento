@@ -1,10 +1,16 @@
 'use strict';
 
-const express = require('express');
+const express    = require('express');
+const morgan     = require('morgan');
 const videoRoutes = require('./routes/video.routes');
 const { errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
+
+// ─── Logger HTTP ─────────────────────────────────────────────────────────────
+// 'dev'      → coloreado y compacto, ideal para desarrollo
+// 'combined' → formato Apache completo, ideal para producción
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ─── Parsers ─────────────────────────────────────────────────────────────────
 app.use(express.json());
