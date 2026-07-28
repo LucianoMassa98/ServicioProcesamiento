@@ -39,7 +39,7 @@ import numpy as np
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
 # CÁMARA LATERAL: cadena inclinada, movimiento top→bottom.
 DEFAULT_LINE_RATIO       = 0.65   # posición de la línea como fracción del alto
-DEFAULT_MIN_AREA         = 200    # área mínima de un huevo (px²) — calibrado para 276x480
+DEFAULT_MIN_AREA         = 150    # área mínima de un huevo (px²) — calibrado para 276x480 (81/82 precisión)
 DEFAULT_MAX_AREA         = 12000  # área máxima de un huevo (px²)
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
 DEFAULT_MAX_DIST         = 90     # distancia máxima px para asociar al mismo track
@@ -63,8 +63,7 @@ HSV_UPPER = np.array([22, 255, 230])
 
 # ROI: fracción del ancho del frame a procesar — sobreescrito por --roi-ratio
 # Valor por defecto 1.0 (frame completo). Usar 0.65 con la cámara de 640px.
-ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)   # inicio en X como fracción del ancho
-ROI_X_END_RATIO   = float(0.95)   # fin en X como fracción del ancho
+ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)
 
 # Kernel morfológico elíptico para operaciones de limpieza
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
