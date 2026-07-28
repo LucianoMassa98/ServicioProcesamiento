@@ -4,12 +4,11 @@
 egg_count.py  –  Conteo de huevos marrones en cadena transportadora.
 
 Algoritmo:
-  1. Convierte cada frame a HSV y aplica máscara para color naranja-marrón.
-  2. Aplica ROI sobre el área visible de la cadena.
-  3. Usa Distance Transform + supresión de no-máximos para encontrar
+  1. Convierte cada frame a HSV y aplica máscara para color naranja-marrón sobre el ROI de la cadena.
+  2. Usa Distance Transform + supresión de no-máximos para encontrar
      el centro de cada huevo individual, incluso dentro de clusters contiguos.
-  4. Rastrea centroides entre frames (nearest-neighbour greedy).
-  5. Cuenta cada huevo la primera vez que su centroide cruza
+  3. Rastrea centroides entre frames (nearest-neighbour greedy).
+  4. Cuenta cada huevo la primera vez que su centroide cruza
      la línea horizontal de conteo (movimiento de arriba→abajo).
 
 Orientación de cámara: LATERAL (vista desde el costado, cadena inclinada).
@@ -41,7 +40,7 @@ DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
 DEFAULT_MAX_DIST         = 45     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 1      # frames mínimos rastreados antes de poder contar
 DEFAULT_MAX_LOST_FRAMES  = 6      # frames sin detección antes de eliminar track
-DEFAULT_ROI_WIDTH_RATIO  = 1.0    # fracción del ancho a procesar (1.0 = frame completo)
+DEFAULT_ROI_WIDTH_RATIO  = 0.85   # fracción del ancho a procesar (0.85 excluye engranajes y riel metálico lateral)
 DEFAULT_WARMUP_FRAMES    = 60     # frames iniciales de calentamiento
 DEFAULT_PEAK_WINDOW      = 19     # ventana para supresión de no-máximos en Distance Transform
 DEFAULT_MIN_PEAK_DIST    = 9.5    # umbral mínimo de Distance Transform (px a borde)
@@ -77,40 +76,26 @@ def parse_args():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def build_egg_mask(frame: np.ndarray, roi_ratio: float = ROI_WIDTH_RATIO) -> np.ndarray:
-    """
-    Genera una máscara binaria de los píxeles con color de huevo naranja-marrón.
-    Recorta el ROI antes de enmascarar.
-    Aplica cierre morfológico para rellenar huecos y apertura para quitar ruido.
-    """
-    h, w     = frame.shape[:2]
-    roi_w    = int(w * roi_ratio)
-    roi      = frame[:, :roi_w]
-
-    hsv      = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
-
-    mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
-    mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
-
-    mask = np.zeros((h, w), dtype=np.uint8)
-    mask[:, :roi_w] = mask_roi
-    return mask
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 def detect_egg_centroids(frame: np.ndarray,
                          roi_ratio: float = ROI_WIDTH_RATIO,
                          peak_window: int = DEFAULT_PEAK_WINDOW,
                          min_peak_dist: float = DEFAULT_MIN_PEAK_DIST) -> list:
     """
-    Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos.
+    Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos sobre el ROI de la cinta.
     Esto permite separar huevos individuales incluso cuando forman grandes masas/clusters contiguos.
     """
-    mask = build_egg_mask(frame, roi_ratio)
+    h, w = frame.shape[:2]
+    roi_w = int(w * roi_ratio)
+    roi = frame[:, :roi_w]
 
-    # Transformada de distancia (distancia L2 de cada píxel blanco al fondo)
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
+
+    mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
+    mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
+
+    # Transformada de distancia sobre la máscara recortada del ROI
+    dist = cv2.distanceTransform(mask_roi, cv2.DIST_L2, 5)
     dist_smooth = cv2.GaussianBlur(dist, (7, 7), 0)
 
     # Supresión de no-máximos locales usando dilatación con kernel de tamaño peak_window
