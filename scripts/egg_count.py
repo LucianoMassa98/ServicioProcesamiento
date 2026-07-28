@@ -5,19 +5,16 @@ egg_count.py  –  Conteo de huevos marrones en cadena transportadora.
 
 Algoritmo:
   1. Convierte cada frame a HSV y aplica máscara para color naranja-marrón.
-  2. Aplica ROI sobre el área visible de la cadena (excluye bordes sin cadena).
+  2. Aplica ROI sobre el área visible de la cadena.
   3. Usa Distance Transform + supresión de no-máximos para encontrar
-     el centro de cada huevo individual, incluso dentro de clusters.
+     el centro de cada huevo individual, incluso dentro de clusters contiguos.
   4. Rastrea centroides entre frames (nearest-neighbour greedy).
   5. Cuenta cada huevo la primera vez que su centroide cruza
      la línea horizontal de conteo (movimiento de arriba→abajo).
-  6. Re-cuenta si el track se pierde y el huevo reaparece.
 
 Orientación de cámara: LATERAL (vista desde el costado, cadena inclinada).
   - La cadena traversa el frame de arriba a abajo con inclinación.
   - Los huevos se desplazan de la parte superior hacia la inferior.
-  - La cadena es continua: MAX_LOST_FRAMES moderado.
-  - El fondo muestra barras metálicas grises de la cadena.
 
 Uso:
   python egg_count.py <video_path> [opciones]
@@ -37,35 +34,24 @@ import numpy as np
 
 
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
-# CÁMARA LATERAL: cadena inclinada, movimiento top→bottom.
 DEFAULT_LINE_RATIO       = 0.65   # posición de la línea como fracción del alto
-DEFAULT_MIN_AREA         = 150    # área mínima de un huevo (px²) — calibrado para 276x480 (81/82 precisión)
-DEFAULT_MAX_AREA         = 12000  # área máxima de un huevo (px²)
+DEFAULT_MIN_AREA         = 150    # reservado para filtros secundarios
+DEFAULT_MAX_AREA         = 12000  # reservado para filtros secundarios
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
-DEFAULT_MAX_DIST         = 90     # distancia máxima px para asociar al mismo track
+DEFAULT_MAX_DIST         = 45     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 1      # frames mínimos rastreados antes de poder contar
-DEFAULT_MAX_LOST_FRAMES  = 10     # frames sin detección antes de eliminar track
+DEFAULT_MAX_LOST_FRAMES  = 6      # frames sin detección antes de eliminar track
 DEFAULT_ROI_WIDTH_RATIO  = 1.0    # fracción del ancho a procesar (1.0 = frame completo)
-                                   # (moderado: la cadena lateral es continua)
-
-# Radio aproximado de un huevo en píxeles (vista lateral, cadena inclinada).
-# Los huevos vistos de costado aparecen como elipses; r es el semi-eje mayor.
-# Ajustar si la distancia focal o la resolución cambian.
-APPROX_EGG_RADIUS_PX = 30
+DEFAULT_WARMUP_FRAMES    = 60     # frames iniciales de calentamiento
+DEFAULT_PEAK_WINDOW      = 19     # ventana para supresión de no-máximos en Distance Transform
+DEFAULT_MIN_PEAK_DIST    = 9.5    # umbral mínimo de Distance Transform (px a borde)
 
 
-# ─── Rango HSV para huevos naranja-marrones (cámara lateral) ─────────────────
-# Vista lateral: la iluminación de costado reduce la saturación percibida y
-# puede aclarar el tono. Se amplía el rango respecto a la vista cenital.
-# Fondo: barras metálicas grises (baja saturación) → quedan fuera de la máscara.
+# ─── Rango HSV para huevos naranja-marrones ──────────────────────────────────
 HSV_LOWER = np.array([ 5, 80,  60])
 HSV_UPPER = np.array([22, 255, 230])
 
-# ROI: fracción del ancho del frame a procesar — sobreescrito por --roi-ratio
-# Valor por defecto 1.0 (frame completo). Usar 0.65 con la cámara de 640px.
 ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)
-
-# Kernel morfológico elíptico para operaciones de limpieza
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
 
@@ -80,6 +66,11 @@ def parse_args():
     p.add_argument('--max-dist',         type=float, default=DEFAULT_MAX_DIST)
     p.add_argument('--min-track-frames', type=int,   default=DEFAULT_MIN_TRACK_FRAMES)
     p.add_argument('--max-lost-frames',  type=int,   default=DEFAULT_MAX_LOST_FRAMES)
+    p.add_argument('--warmup-frames',    type=int,   default=DEFAULT_WARMUP_FRAMES)
+    p.add_argument('--peak-window',      type=int,   default=DEFAULT_PEAK_WINDOW,
+                   help='Tamaño de ventana de supresión de no-máximos (Distance Transform)')
+    p.add_argument('--min-peak-dist',    type=float, default=DEFAULT_MIN_PEAK_DIST,
+                   help='Umbral mínimo de Distance Transform para detectar centroides')
     p.add_argument('--roi-ratio',        type=float, default=DEFAULT_ROI_WIDTH_RATIO,
                    help='Fracción del ancho del frame a analizar (0.0-1.0)')
     return p.parse_args()
@@ -89,7 +80,7 @@ def parse_args():
 def build_egg_mask(frame: np.ndarray, roi_ratio: float = ROI_WIDTH_RATIO) -> np.ndarray:
     """
     Genera una máscara binaria de los píxeles con color de huevo naranja-marrón.
-    Recorta el ROI (solo la zona de la cinta) antes de enmascarar.
+    Recorta el ROI antes de enmascarar.
     Aplica cierre morfológico para rellenar huecos y apertura para quitar ruido.
     """
     h, w     = frame.shape[:2]
@@ -102,107 +93,59 @@ def build_egg_mask(frame: np.ndarray, roi_ratio: float = ROI_WIDTH_RATIO) -> np.
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
 
-    # Devolver máscara del tamaño del frame completo (rellenar derecha con 0)
     mask = np.zeros((h, w), dtype=np.uint8)
     mask[:, :roi_w] = mask_roi
     return mask
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def separate_blobs_watershed(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def detect_egg_centroids(frame: np.ndarray,
+                         roi_ratio: float = ROI_WIDTH_RATIO,
+                         peak_window: int = DEFAULT_PEAK_WINDOW,
+                         min_peak_dist: float = DEFAULT_MIN_PEAK_DIST) -> list:
     """
-    (Usado solo en el script de debug para visualización.)
-    Aplica Distance Transform + Watershed sobre la máscara para separar
-    huevos que se tocan en el marcador binario.
-    Retorna una imagen de marcadores etiquetados (np.int32).
-    """
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-    _, sure_fg = cv2.threshold(dist, 0.38 * dist.max(), 255, 0)
-    sure_fg    = np.uint8(sure_fg)
-    sure_bg    = cv2.dilate(mask, MORPH_KERNEL, iterations=2)
-    unknown    = cv2.subtract(sure_bg, sure_fg)
-    _, markers = cv2.connectedComponents(sure_fg)
-    markers    = markers + 1
-    markers[unknown == 255] = 0
-    markers = cv2.watershed(frame, markers)
-    return markers
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-def detect_egg_centroids(frame: np.ndarray, min_area: int, max_area: int,
-                         roi_ratio: float = ROI_WIDTH_RATIO) -> list:
-    """
-    Detecta huevos en un frame usando detección directa de contornos.
-
-    Pipeline:
-      1. Máscara de color naranja-marrón con saturación alta sobre el ROI.
-      2. Contornos externos sobre la máscara limpiada.
-      3. Filtrar por área, circularidad y ratio de aspecto para descartar
-         barras de la cinta (alargadas, baja circularidad) y ruido pequeño.
+    Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos.
+    Esto permite separar huevos individuales incluso cuando forman grandes masas/clusters contiguos.
     """
     mask = build_egg_mask(frame, roi_ratio)
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Transformada de distancia (distancia L2 de cada píxel blanco al fondo)
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    dist_smooth = cv2.GaussianBlur(dist, (7, 7), 0)
 
-    centroids = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if not (min_area <= area <= max_area):
-            continue
+    # Supresión de no-máximos locales usando dilatación con kernel de tamaño peak_window
+    kernel = np.ones((peak_window, peak_window), np.uint8)
+    local_max = cv2.dilate(dist_smooth, kernel)
 
-        # Circularidad: 4π·A / P²  (1.0 = círculo perfecto)
-        # Umbral ≥0.25 para capturar huevos parcialmente cubiertos por barras
-        perimeter = cv2.arcLength(cnt, True)
-        if perimeter == 0:
-            continue
-        circularity = 4 * math.pi * area / (perimeter ** 2)
-        if not (0.25 <= circularity <= 1.4):
-            continue
-
-        # Ratio de aspecto: rechaza barras muy alargadas (barras de cinta < 0.35)
-        x, y, bw, bh = cv2.boundingRect(cnt)
-        aspect_ratio  = min(bw, bh) / max(bw, bh) if max(bw, bh) > 0 else 0
-        if aspect_ratio < 0.35:
-            continue
-
-        M = cv2.moments(cnt)
-        if M['m00'] == 0:
-            continue
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
-        centroids.append((cx, cy))
-
-    return centroids
+    # Los picos locales son los máximos dentro de la ventana que superan el umbral de distancia
+    peaks_mask = (dist_smooth == local_max) & (dist_smooth >= min_peak_dist)
+    ys, xs = np.where(peaks_mask)
+    return list(zip(xs, ys))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 class EggTracker:
     """
     Rastrea huevos entre frames usando nearest-neighbour greedy matching
-    y cuenta cada uno cuando su centroide cruza la línea horizontal.
-
-    Un huevo se cuenta solo si:
-      - fue rastreado durante al menos `min_track_frames` frames (evita falsos positivos)
-      - su centroide pasa de arriba de la línea a abajo (movimiento top→bottom)
-      - aún no fue contado en este recorrido
+    y cuenta cada huevo cuando su centroide cruza la línea horizontal de conteo.
     """
 
     def __init__(self, line_y: int, max_dist: float,
-                 min_track_frames: int, max_lost_frames: int):
+                 min_track_frames: int, max_lost_frames: int,
+                 warmup_frames: int = DEFAULT_WARMUP_FRAMES):
         self.line_y           = line_y
         self.max_dist         = max_dist
         self.min_track_frames = min_track_frames
         self.max_lost_frames  = max_lost_frames
+        self.warmup_frames    = warmup_frames
         self.tracks: dict     = {}   # id → {cx, cy, frames, counted, lost}
         self._next_id: int    = 0
         self.egg_count: int   = 0
 
-    # ── Asociar centroides a tracks existentes ────────────────────────────────
     def update(self, centroids: list) -> None:
         used_tracks    = set()
         used_centroids = set()
 
-        # Calcular todas las distancias posibles y ordenar de menor a mayor
         candidates = []
         for tid, track in self.tracks.items():
             for cidx, (cx, cy) in enumerate(centroids):
@@ -211,7 +154,6 @@ class EggTracker:
                     candidates.append((dist, tid, cidx))
         candidates.sort()
 
-        # Asignar greedy
         for dist, tid, cidx in candidates:
             if tid in used_tracks or cidx in used_centroids:
                 continue
@@ -226,19 +168,16 @@ class EggTracker:
             self.tracks[tid]['frames'] += 1
             self.tracks[tid]['lost']   = 0
 
-            # ── Lógica de conteo ─────────────────────────────────────────────
             if (not self.tracks[tid]['counted']
                     and self.tracks[tid]['frames'] >= self.min_track_frames
                     and prev_cy < self.line_y <= cy):
                 self.tracks[tid]['counted'] = True
                 self.egg_count += 1
 
-        # Incrementar contador de frames perdidos para tracks sin match
         for tid in list(self.tracks):
             if tid not in used_tracks:
                 self.tracks[tid]['lost'] += 1
 
-        # Crear nuevos tracks para centroides sin asignar
         for cidx, (cx, cy) in enumerate(centroids):
             if cidx not in used_centroids:
                 self.tracks[self._next_id] = {
@@ -249,7 +188,6 @@ class EggTracker:
                 }
                 self._next_id += 1
 
-        # Eliminar tracks obsoletos
         self.tracks = {
             tid: t for tid, t in self.tracks.items()
             if t['lost'] <= self.max_lost_frames
@@ -278,6 +216,7 @@ def main():
         max_dist         = args.max_dist,
         min_track_frames = args.min_track_frames,
         max_lost_frames  = args.max_lost_frames,
+        warmup_frames    = args.warmup_frames,
     )
 
     frame_idx  = 0
@@ -292,7 +231,12 @@ def main():
         if frame_idx % args.skip_frames != 0:
             continue
 
-        centroids = detect_egg_centroids(frame, args.min_area, args.max_area, args.roi_ratio)
+        centroids = detect_egg_centroids(
+            frame,
+            roi_ratio=args.roi_ratio,
+            peak_window=args.peak_window,
+            min_peak_dist=args.min_peak_dist,
+        )
         tracker.update(centroids)
         processed += 1
 
