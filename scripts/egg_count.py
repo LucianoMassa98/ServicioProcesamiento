@@ -38,13 +38,14 @@ import numpy as np
 
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
 # CÁMARA LATERAL: cadena inclinada, movimiento top→bottom.
-DEFAULT_LINE_RATIO       = 0.55   # línea al 55% del alto del frame
-DEFAULT_MIN_AREA         = 600    # no usado en detección por distancia (solo filtro legacy)
-DEFAULT_MAX_AREA         = 25000  # no usado en detección por distancia (solo filtro legacy)
+DEFAULT_LINE_RATIO       = 0.65   # posición de la línea como fracción del alto
+DEFAULT_MIN_AREA         = 200    # área mínima de un huevo (px²) — calibrado para 276x480
+DEFAULT_MAX_AREA         = 12000  # área máxima de un huevo (px²)
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
 DEFAULT_MAX_DIST         = 90     # distancia máxima px para asociar al mismo track
-DEFAULT_MIN_TRACK_FRAMES = 3      # frames mínimos rastreados antes de poder contar
-DEFAULT_MAX_LOST_FRAMES  = 20     # frames sin detección antes de eliminar track
+DEFAULT_MIN_TRACK_FRAMES = 1      # frames mínimos rastreados antes de poder contar
+DEFAULT_MAX_LOST_FRAMES  = 10     # frames sin detección antes de eliminar track
+DEFAULT_ROI_WIDTH_RATIO  = 1.0    # fracción del ancho a procesar (1.0 = frame completo)
                                    # (moderado: la cadena lateral es continua)
 
 # Radio aproximado de un huevo en píxeles (vista lateral, cadena inclinada).
@@ -60,9 +61,9 @@ APPROX_EGG_RADIUS_PX = 30
 HSV_LOWER = np.array([ 5, 80,  60])
 HSV_UPPER = np.array([22, 255, 230])
 
-# ROI sobre la cadena lateral: la cadena ocupa casi todo el ancho del frame.
-# Se recortan pequeños márgenes para excluir artefactos de los bordes del encuadre.
-ROI_X_START_RATIO = float(0.05)   # inicio en X como fracción del ancho
+# ROI: fracción del ancho del frame a procesar — sobreescrito por --roi-ratio
+# Valor por defecto 1.0 (frame completo). Usar 0.65 con la cámara de 640px.
+ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)   # inicio en X como fracción del ancho
 ROI_X_END_RATIO   = float(0.95)   # fin en X como fracción del ancho
 
 # Kernel morfológico elíptico para operaciones de limpieza
@@ -72,7 +73,7 @@ MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 # ──────────────────────────────────────────────────────────────────────────────
 def parse_args():
     p = argparse.ArgumentParser(description='Cuenta huevos marrones en un video.')
-    p.add_argument('video_path',                                    help='Ruta al video')
+    p.add_argument('video_path',                                     help='Ruta al video')
     p.add_argument('--line-ratio',       type=float, default=DEFAULT_LINE_RATIO)
     p.add_argument('--min-area',         type=int,   default=DEFAULT_MIN_AREA)
     p.add_argument('--max-area',         type=int,   default=DEFAULT_MAX_AREA)
@@ -80,24 +81,21 @@ def parse_args():
     p.add_argument('--max-dist',         type=float, default=DEFAULT_MAX_DIST)
     p.add_argument('--min-track-frames', type=int,   default=DEFAULT_MIN_TRACK_FRAMES)
     p.add_argument('--max-lost-frames',  type=int,   default=DEFAULT_MAX_LOST_FRAMES)
+    p.add_argument('--roi-ratio',        type=float, default=DEFAULT_ROI_WIDTH_RATIO,
+                   help='Fracción del ancho del frame a analizar (0.0-1.0)')
     return p.parse_args()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def build_egg_mask(frame: np.ndarray) -> np.ndarray:
+def build_egg_mask(frame: np.ndarray, roi_ratio: float = ROI_WIDTH_RATIO) -> np.ndarray:
     """
     Genera una máscara binaria de los píxeles con color de huevo naranja-marrón.
-
-    ROI en X: cubre casi todo el ancho del frame (cámara lateral).
-    Excluye pequeños márgenes en los bordes del encuadre que pueden tener
-    reflejos o artefactos. Las barras metálicas grises de la cadena quedan
-    fuera de la máscara por su baja saturación HSV.
+    Recorta el ROI (solo la zona de la cinta) antes de enmascarar.
     Aplica cierre morfológico para rellenar huecos y apertura para quitar ruido.
     """
-    h, w = frame.shape[:2]
-    x1   = int(w * ROI_X_START_RATIO)
-    x2   = int(w * ROI_X_END_RATIO)
-    roi  = frame[:, x1:x2]
+    h, w     = frame.shape[:2]
+    roi_w    = int(w * roi_ratio)
+    roi      = frame[:, :roi_w]
 
     hsv      = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
@@ -105,9 +103,9 @@ def build_egg_mask(frame: np.ndarray) -> np.ndarray:
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
 
-    # Devolver máscara del tamaño del frame completo (rellenar laterales con 0)
+    # Devolver máscara del tamaño del frame completo (rellenar derecha con 0)
     mask = np.zeros((h, w), dtype=np.uint8)
-    mask[:, x1:x2] = mask_roi
+    mask[:, :roi_w] = mask_roi
     return mask
 
 
@@ -132,68 +130,50 @@ def separate_blobs_watershed(frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-def detect_egg_centroids(frame: np.ndarray, min_area: int, max_area: int) -> list:
+def detect_egg_centroids(frame: np.ndarray, min_area: int, max_area: int,
+                         roi_ratio: float = ROI_WIDTH_RATIO) -> list:
     """
-    Detecta el centro de cada huevo individual en el frame.
+    Detecta huevos en un frame usando detección directa de contornos.
 
     Pipeline:
-      1. Máscara de color naranja-marrón sobre el ROI de la cinta.
-      2. Distance Transform: cada píxel toma el valor de su distancia al borde.
-         Los centros de huevo quedan como máximos locales.
-      3. Supresión de no-máximos con kernel de radio de un huevo:
-         en cada ventana del tamaño de un huevo solo queda UN máximo.
-      4. Cada máximo local = un huevo individual, incluso dentro de clusters.
-
-    Esta técnica evita el problema de blobs fusionados donde múltiples
-    huevos tocados se detectaban como un único centroide.
+      1. Máscara de color naranja-marrón con saturación alta sobre el ROI.
+      2. Contornos externos sobre la máscara limpiada.
+      3. Filtrar por área, circularidad y ratio de aspecto para descartar
+         barras de la cinta (alargadas, baja circularidad) y ruido pequeño.
     """
-    mask = build_egg_mask(frame)
+    mask = build_egg_mask(frame, roi_ratio)
 
-    if cv2.countNonZero(mask) == 0:
-        return []
-
-    # ── Distance Transform ──────────────────────────────────────────────
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-    # dist[y,x] = distancia del píxel (x,y) al borde más cercano
-    # Centro de un huevo de radio R tiene dist ≈ R
-
-    # ── Supresión de no-máximos ────────────────────────────────────────
-    # Dilatamos con un kernel del tamaño aproximado de un huevo.
-    # Tras la dilatación, cada píxel tiene el valor del máximo de su vecindad.
-    # Los máximos locales son donde dist ≈ dist_dilated (son el máximo local).
-    kernel_diam = max(3, 2 * APPROX_EGG_RADIUS_PX + 5)   # dilámetro de búsqueda
-    dil_kernel  = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (kernel_diam, kernel_diam))
-    dist_dil    = cv2.dilate(dist, dil_kernel)
-
-    # Un máximo local es un píxel que:
-    #   a) Es prácticamente igual al máximo de su vecindad (dist ≥ 98% de dist_dil)
-    #   b) Está suficientemente dentro del blob (dist > umbral mínimo)
-    min_dist_thr = max(4.0, APPROX_EGG_RADIUS_PX * 0.4)
-    local_max    = np.uint8(
-        (dist >= dist_dil * 0.92) & (dist > min_dist_thr)
-    )
-
-    # Pequeña dilatación para unir máximos muy próximos del mismo huevo
-    merge_k   = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    local_max = cv2.dilate(local_max, merge_k, iterations=1)
-
-    # ── Extraer centroides de cada máximo local ───────────────────────────
-    n_labels, _, stats, cents = cv2.connectedComponentsWithStats(local_max)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     centroids = []
-    h, w = mask.shape[:2]
-    for i in range(1, n_labels):
-        cx = int(cents[i][0])
-        cy = int(cents[i][1])
-        # Verificar que el centroide esté dentro de la máscara y tenga
-        # distancia suficiente al borde (es un centro real, no ruido de borde)
-        if 0 <= cy < h and 0 <= cx < w:
-            if mask[cy, cx] > 0 and dist[cy, cx] > min_dist_thr:
-                centroids.append((cx, cy))
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if not (min_area <= area <= max_area):
+            continue
+
+        # Circularidad: 4π·A / P²  (1.0 = círculo perfecto)
+        # Umbral ≥0.25 para capturar huevos parcialmente cubiertos por barras
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter == 0:
+            continue
+        circularity = 4 * math.pi * area / (perimeter ** 2)
+        if not (0.25 <= circularity <= 1.4):
+            continue
+
+        # Ratio de aspecto: rechaza barras muy alargadas (barras de cinta < 0.35)
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        aspect_ratio  = min(bw, bh) / max(bw, bh) if max(bw, bh) > 0 else 0
+        if aspect_ratio < 0.35:
+            continue
+
+        M = cv2.moments(cnt)
+        if M['m00'] == 0:
+            continue
+        cx = int(M['m10'] / M['m00'])
+        cy = int(M['m01'] / M['m00'])
+        centroids.append((cx, cy))
 
     return centroids
-
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -291,7 +271,7 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     line_y = int(height * args.line_ratio)
 
-    print(f'[egg_count] line_y={line_y}px  video={args.video_path}',
+    print(f'[egg_count] line_y={line_y}px  roi={args.roi_ratio:.2f}  video={args.video_path}',
           file=sys.stderr)
 
     tracker = EggTracker(
@@ -313,7 +293,7 @@ def main():
         if frame_idx % args.skip_frames != 0:
             continue
 
-        centroids = detect_egg_centroids(frame, args.min_area, args.max_area)
+        centroids = detect_egg_centroids(frame, args.min_area, args.max_area, args.roi_ratio)
         tracker.update(centroids)
         processed += 1
 
