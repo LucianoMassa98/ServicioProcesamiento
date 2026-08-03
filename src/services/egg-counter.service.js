@@ -115,8 +115,8 @@ class EggCounterService {
 
   static get DEFAULT_PYTHON_TIMEOUT_MS() {
     const raw = process.env.EGG_PROCESS_TIMEOUT_MS;
-    const parsed = Number.parseInt(raw ?? '180000', 10);
-    return Number.isNaN(parsed) || parsed < 1000 ? 180000 : parsed;
+    const parsed = Number.parseInt(raw ?? '600000', 10);
+    return Number.isNaN(parsed) || parsed < 1000 ? 600000 : parsed;
   }
 
   /**

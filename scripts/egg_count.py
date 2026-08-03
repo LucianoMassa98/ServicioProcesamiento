@@ -149,7 +149,7 @@ class Track:
 class EggTracker:
     """
     Rastrea huevos entre frames usando nearest-neighbour greedy matching
-    y cuenta cada huevo cuando su centroide cruza la línea horizontal de conteo (movimiento abajo -> arriba).
+    y cuenta cada huevo cuando su centroide cruza la línea horizontal de conteo (movimiento arriba -> abajo).
     """
 
     def __init__(self, line_y: int, max_dist: float,
@@ -163,8 +163,10 @@ class EggTracker:
         self.tracks: dict     = {}   # id → Track
         self._next_id: int    = 0
         self.egg_count: int   = 0
+        self.frame_counter: int = 0
 
     def update(self, centroids: list) -> None:
+        self.frame_counter += 1
         used_tracks    = set()
         used_centroids = set()
 
@@ -193,10 +195,11 @@ class EggTracker:
                 track.frames += 1
                 track.lost   = 0
 
-                # Dirección de abajo hacia arriba: prev_cy >= line_y > cy
+                # Dirección de arriba hacia abajo: prev_cy <= line_y < cy
                 if (not track.counted
                         and track.frames >= self.min_track_frames
-                        and prev_cy >= self.line_y > cy):
+                        and self.frame_counter > self.warmup_frames
+                        and prev_cy <= self.line_y < cy):
                     track.counted = True
                     self.egg_count += 1
 
@@ -231,9 +234,12 @@ def main():
 
     orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     orig_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    total_seconds = total_frames / fps if fps > 0 else 0
 
-    # Escalar cualquier video de alta resolución (1080p/4K) a un alto de 480px para garantizar bajo consumo de RAM
-    target_h = 480
+    # Escalar cualquier video de alta resolución (1080p/4K) a un alto moderado para reducir uso de RAM.
+    target_h = 360
     need_resize = orig_height > target_h
     if need_resize:
         scale = target_h / float(orig_height)
@@ -245,8 +251,17 @@ def main():
 
     line_y = int(effective_h * args.line_ratio)
 
-    print(f'[egg_count] line_y={line_y}px ({effective_w}x{effective_h})  roi={args.roi_ratio:.2f}  video={args.video_path}',
-          file=sys.stderr)
+    if args.skip_frames == DEFAULT_SKIP_FRAMES and fps > 0:
+        auto_skip = min(8, max(2, int(round(fps / 6))))
+        if auto_skip > args.skip_frames:
+            print(f'[egg_count] Ajustando skip_frames de {args.skip_frames} a {auto_skip} según fps={fps:.1f}', file=sys.stderr)
+            args.skip_frames = auto_skip
+
+    print(
+        f'[egg_count] line_y={line_y}px ({effective_w}x{effective_h}) fps={fps:.1f} ' +
+        f'frames={total_frames} duracion={total_seconds:.1f}s skip={args.skip_frames} roi={args.roi_ratio:.2f} video={args.video_path}',
+        file=sys.stderr
+    )
 
     tracker = EggTracker(
         line_y           = line_y,
@@ -284,6 +299,8 @@ def main():
         processed += 1
 
         if processed % 50 == 0:
+            elapsed = round(time.time() - start_time, 1)
+            print(f'[egg_count] processed={processed} frame_idx={frame_idx} elapsed={elapsed}s eggs={tracker.egg_count}', file=sys.stderr)
             gc.collect()
 
     cap.release()
