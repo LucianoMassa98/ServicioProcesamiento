@@ -125,6 +125,7 @@ def detect_egg_centroids(frame: np.ndarray,
     # Transformada de distancia sobre la máscara recortada del ROI
     dist = cv2.distanceTransform(mask_roi, cv2.DIST_L2, 5)
     dist_smooth = cv2.GaussianBlur(dist, (7, 7), 0)
+    del dist
 
     # Supresión de no-máximos locales usando dilatación con kernel preasignado
     kernel = get_dilate_kernel(peak_window)
@@ -132,7 +133,11 @@ def detect_egg_centroids(frame: np.ndarray,
 
     # Los picos locales son los máximos dentro de la ventana que superan el umbral de distancia
     peaks_mask = (dist_smooth == local_max) & (dist_smooth >= min_peak_dist)
+    del dist_smooth, local_max
+
     ys, xs = np.where(peaks_mask)
+    del peaks_mask
+
     return [(x + x1, y) for x, y in zip(xs, ys)]
 
 
@@ -238,13 +243,16 @@ def main():
     processed  = 0
 
     while True:
+        frame_idx += 1
+
+        if frame_idx % args.skip_frames != 0:
+            if not cap.grab():
+                break
+            continue
+
         ret, frame = cap.read()
         if not ret:
             break
-
-        frame_idx += 1
-        if frame_idx % args.skip_frames != 0:
-            continue
 
         centroids = detect_egg_centroids(
             frame,
@@ -255,7 +263,7 @@ def main():
         tracker.update(centroids)
         processed += 1
 
-        if processed % 300 == 0:
+        if processed % 50 == 0:
             gc.collect()
 
     cap.release()
