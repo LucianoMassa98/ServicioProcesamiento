@@ -67,7 +67,6 @@ HSV_UPPER = np.array([25, 255, 240])
 
 ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -105,7 +104,6 @@ def detect_egg_centroids(frame: np.ndarray,
                          min_peak_dist: float = DEFAULT_MIN_PEAK_DIST) -> list:
     """
     Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos sobre el ROI de la cinta.
-    Aplica CLAHE al canal V para garantizar robustez ante variaciones de iluminación a distintas horas del día.
     Excluye bordes laterales (engranajes a la izquierda y rieles metálicos a la derecha).
     """
     h, w = frame.shape[:2]
@@ -114,9 +112,6 @@ def detect_egg_centroids(frame: np.ndarray,
     roi = frame[:, x1:x2]
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    # Normalización adaptativa de brillo para manejar distintos niveles de iluminación durante el día
-    hsv[:, :, 2] = CLAHE.apply(hsv[:, :, 2])
-
     mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
 
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
