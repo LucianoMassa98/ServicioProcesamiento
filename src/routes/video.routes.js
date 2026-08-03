@@ -29,12 +29,56 @@ const validateAnalyzeRequest = [
 ];
 
 /**
- * POST /api/videos/analyze
- *
- * Flujo de middlewares:
- *  1. uploadVideoMiddleware  → guarda el video en /tmp y valida formato/tamaño
- *  2. validateAnalyzeRequest → valida campos de texto
- *  3. videoController.analyze → procesa y responde
+ * @openapi
+ * /api/videos/analyze:
+ *   post:
+ *     summary: Enviar un video para análisis en segundo plano
+ *     tags:
+ *       - Videos
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *               - name
+ *               - galponId
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Archivo de video (mp4, avi, mov, mkv)
+ *               name:
+ *                 type: string
+ *                 example: Cinta Galpón A
+ *                 description: Nombre descriptivo del análisis
+ *               galponId:
+ *                 type: string
+ *                 format: uuid
+ *                 example: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+ *                 description: UUID v4 del galpón
+ *     responses:
+ *       200:
+ *         description: Video recibido correctamente, análisis iniciado en background
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Video recibido. El análisis está en proceso.
+ *       400:
+ *         description: Error de validación en los campos o archivo no proporcionado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post(
   '/analyze',

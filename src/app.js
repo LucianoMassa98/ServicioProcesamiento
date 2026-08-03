@@ -3,6 +3,8 @@
 const express    = require('express');
 const morgan     = require('morgan');
 const videoRoutes = require('./routes/video.routes');
+const analisisRoutes = require('./routes/analisis.routes');
+const setupSwagger = require('./config/swagger');
 const { errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -16,8 +18,12 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ─── Documentación Swagger ──────────────────────────────────────────────────
+setupSwagger(app);
+
 // ─── Rutas ───────────────────────────────────────────────────────────────────
 app.use('/api/videos', videoRoutes);
+app.use('/api/analisis', analisisRoutes);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {

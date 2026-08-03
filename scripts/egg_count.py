@@ -33,25 +33,26 @@ import numpy as np
 
 
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
-DEFAULT_LINE_RATIO       = 0.65   # posición de la línea como fracción del alto
+DEFAULT_LINE_RATIO       = 0.50   # posición de la línea como fracción del alto (a la altura de los plásticos blancos a la mitad)
 DEFAULT_MIN_AREA         = 150    # reservado para filtros secundarios
 DEFAULT_MAX_AREA         = 12000  # reservado para filtros secundarios
 DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
 DEFAULT_MAX_DIST         = 45     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 1      # frames mínimos rastreados antes de poder contar
 DEFAULT_MAX_LOST_FRAMES  = 6      # frames sin detección antes de eliminar track
-DEFAULT_ROI_WIDTH_RATIO  = 0.85   # fracción del ancho a procesar (0.85 excluye engranajes y riel metálico lateral)
+DEFAULT_ROI_WIDTH_RATIO  = 0.78   # fracción del ancho a procesar (excluye engranajes a la izquierda y riel metálico lateral a la derecha)
 DEFAULT_WARMUP_FRAMES    = 60     # frames iniciales de calentamiento
 DEFAULT_PEAK_WINDOW      = 19     # ventana para supresión de no-máximos en Distance Transform
 DEFAULT_MIN_PEAK_DIST    = 9.5    # umbral mínimo de Distance Transform (px a borde)
 
 
-# ─── Rango HSV para huevos naranja-marrones ──────────────────────────────────
-HSV_LOWER = np.array([ 5, 80,  60])
-HSV_UPPER = np.array([22, 255, 230])
+# ─── Rango HSV para huevos naranja-marrones sobre fondo blanco ────────────────
+HSV_LOWER = np.array([ 5, 60,  40])
+HSV_UPPER = np.array([25, 255, 240])
 
 ROI_WIDTH_RATIO = float(DEFAULT_ROI_WIDTH_RATIO)
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -82,13 +83,18 @@ def detect_egg_centroids(frame: np.ndarray,
                          min_peak_dist: float = DEFAULT_MIN_PEAK_DIST) -> list:
     """
     Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos sobre el ROI de la cinta.
-    Esto permite separar huevos individuales incluso cuando forman grandes masas/clusters contiguos.
+    Aplica CLAHE al canal V para garantizar robustez ante variaciones de iluminación a distintas horas del día.
+    Excluye bordes laterales (engranajes a la izquierda y rieles metálicos a la derecha).
     """
     h, w = frame.shape[:2]
-    roi_w = int(w * roi_ratio)
-    roi = frame[:, :roi_w]
+    x1 = int(w * 0.08)
+    x2 = int(w * roi_ratio)
+    roi = frame[:, x1:x2]
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    # Normalización adaptativa de brillo para manejar distintos niveles de iluminación durante el día
+    hsv[:, :, 2] = CLAHE.apply(hsv[:, :, 2])
+
     mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
 
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
@@ -105,14 +111,14 @@ def detect_egg_centroids(frame: np.ndarray,
     # Los picos locales son los máximos dentro de la ventana que superan el umbral de distancia
     peaks_mask = (dist_smooth == local_max) & (dist_smooth >= min_peak_dist)
     ys, xs = np.where(peaks_mask)
-    return list(zip(xs, ys))
+    return [(x + x1, y) for x, y in zip(xs, ys)]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 class EggTracker:
     """
     Rastrea huevos entre frames usando nearest-neighbour greedy matching
-    y cuenta cada huevo cuando su centroide cruza la línea horizontal de conteo.
+    y cuenta cada huevo cuando su centroide cruza la línea horizontal de conteo (movimiento abajo -> arriba).
     """
 
     def __init__(self, line_y: int, max_dist: float,
@@ -153,9 +159,10 @@ class EggTracker:
             self.tracks[tid]['frames'] += 1
             self.tracks[tid]['lost']   = 0
 
+            # Dirección de abajo hacia arriba: prev_cy >= line_y > cy
             if (not self.tracks[tid]['counted']
                     and self.tracks[tid]['frames'] >= self.min_track_frames
-                    and prev_cy < self.line_y <= cy):
+                    and prev_cy >= self.line_y > cy):
                 self.tracks[tid]['counted'] = True
                 self.egg_count += 1
 
