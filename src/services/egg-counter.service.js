@@ -33,6 +33,34 @@ class EggCounterService {
   );
 
   /**
+   * Control de concurrencia: límite de análisis en paralelo para evitar sobrecarga de RAM/CPU.
+   * Por defecto 1 análisis a la vez (modificable por variable de entorno MAX_CONCURRENT_ANALYSES).
+   */
+  static MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENT_ANALYSES || '1', 10);
+  static activeCount = 0;
+  static queue = [];
+
+  /**
+   * Procesa la cola de solicitudes pendientes respetando el límite de concurrencia.
+   * @private
+   */
+  static _processQueue() {
+    while (EggCounterService.activeCount < EggCounterService.MAX_CONCURRENCY && EggCounterService.queue.length > 0) {
+      const task = EggCounterService.queue.shift();
+      EggCounterService.activeCount++;
+
+      console.log(
+        `[EggCounterService] Procesando tarea de la cola (activas=${EggCounterService.activeCount}, en espera=${EggCounterService.queue.length})`
+      );
+
+      task.execute().finally(() => {
+        EggCounterService.activeCount--;
+        EggCounterService._processQueue();
+      });
+    }
+  }
+
+  /**
    * Resuelve el binario de Python disponible en el entorno.
    * Prioridad: PYTHON_BIN env var → python3 → python
    *
@@ -54,12 +82,30 @@ class EggCounterService {
 
   /**
    * Cuenta los huevos que cruzan la línea de conteo en el video.
-   * Invoca el script Python y parsea su salida JSON desde stdout.
+   * Encola la ejecución para evitar fallos de memoria RAM por múltiples procesos simultáneos.
    *
    * @param {string} videoPath - Ruta absoluta al archivo de video temporal.
    * @returns {Promise<{ eggs: number, processedFrames: number, processingTime: number }>}
    */
   async countEggs(videoPath) {
+    return new Promise((resolve, reject) => {
+      const task = {
+        execute: () => this._runPythonCount(videoPath).then(resolve, reject),
+      };
+
+      EggCounterService.queue.push(task);
+      EggCounterService._processQueue();
+    });
+  }
+
+  /**
+   * Ejecuta el script Python en un subproceso.
+   *
+   * @private
+   * @param {string} videoPath
+   * @returns {Promise<{ eggs: number, processedFrames: number, processingTime: number }>}
+   */
+  async _runPythonCount(videoPath) {
     return new Promise((resolve, reject) => {
       const pythonBin = EggCounterService.resolvePythonBin();
 
@@ -89,15 +135,18 @@ class EggCounterService {
       proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
         if (stderr.trim()) {
-          // stderr contiene logs de diagnóstico del script (no son errores fatales)
           console.log(`[EggCounterService] Script stderr:\n${stderr.trim()}`);
         }
 
         if (code !== 0) {
+          const detail = code === null
+            ? `fue terminado por señal ${signal} (posible falta de memoria RAM / OOM Killer en Docker/Railway)`
+            : `terminó con código ${code}`;
+
           return reject(
-            new Error(`egg_count.py terminó con código ${code}: ${stderr.trim()}`),
+            new Error(`egg_count.py ${detail}. Detalle: ${stderr.trim() || stdout.trim() || '(vacío)'}`),
           );
         }
 
