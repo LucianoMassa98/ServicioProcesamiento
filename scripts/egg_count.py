@@ -168,35 +168,37 @@ class EggTracker:
         used_tracks    = set()
         used_centroids = set()
 
-        candidates = []
+        # Búsqueda directa del vecino más cercano sin asignación de listas ni tuplas en memoria
         for tid, track in self.tracks.items():
+            best_cidx = -1
+            best_dist = self.max_dist
+
             for cidx, (cx, cy) in enumerate(centroids):
+                if cidx in used_centroids:
+                    continue
                 dist = math.hypot(cx - track.cx, cy - track.cy)
-                if dist <= self.max_dist:
-                    candidates.append((dist, tid, cidx))
-        candidates.sort()
+                if dist <= best_dist:
+                    best_dist = dist
+                    best_cidx = cidx
 
-        for dist, tid, cidx in candidates:
-            if tid in used_tracks or cidx in used_centroids:
-                continue
-            used_tracks.add(tid)
-            used_centroids.add(cidx)
+            if best_cidx != -1:
+                used_tracks.add(tid)
+                used_centroids.add(best_cidx)
 
-            cx, cy  = centroids[cidx]
-            track   = self.tracks[tid]
-            prev_cy = track.cy
+                cx, cy  = centroids[best_cidx]
+                prev_cy = track.cy
 
-            track.cx     = cx
-            track.cy     = cy
-            track.frames += 1
-            track.lost   = 0
+                track.cx     = cx
+                track.cy     = cy
+                track.frames += 1
+                track.lost   = 0
 
-            # Dirección de abajo hacia arriba: prev_cy >= line_y > cy
-            if (not track.counted
-                    and track.frames >= self.min_track_frames
-                    and prev_cy >= self.line_y > cy):
-                track.counted = True
-                self.egg_count += 1
+                # Dirección de abajo hacia arriba: prev_cy >= line_y > cy
+                if (not track.counted
+                        and track.frames >= self.min_track_frames
+                        and prev_cy >= self.line_y > cy):
+                    track.counted = True
+                    self.egg_count += 1
 
         for cidx, (cx, cy) in enumerate(centroids):
             if cidx not in used_centroids:
