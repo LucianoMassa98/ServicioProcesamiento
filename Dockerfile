@@ -13,11 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Asegurar que 'python3' esté disponible siempre como binario y limitar hilos para ahorrar RAM
+# Asegurar que 'python3' esté disponible siempre como binario y limitar hilos + RAM de Node
 ENV PYTHON_BIN=python3 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1
+    MKL_NUM_THREADS=1 \
+    NODE_OPTIONS="--max-old-space-size=128 --expose-gc"
 
 WORKDIR /app
 

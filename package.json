@@ -4,8 +4,8 @@
   "description": "API REST para análisis de videos de cinta transportadora de huevos",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node --max-old-space-size=128 --expose-gc src/index.js",
+    "dev": "nodemon --exec \"node --max-old-space-size=128 --expose-gc\" src/index.js",
     "db:migrate": "node src/scripts/migrate.js"
   },
   "dependencies": {

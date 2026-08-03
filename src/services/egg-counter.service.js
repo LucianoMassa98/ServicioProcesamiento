@@ -125,6 +125,13 @@ class EggCounterService {
         '--roi-ratio',        process.env.EGG_ROI_WIDTH_RATIO         || '0.78',
       ];
 
+      if (global.gc) {
+        try {
+          global.gc();
+          console.log('[EggCounterService] Garbage collector V8 ejecutado en Node.js.');
+        } catch (_) {}
+      }
+
       console.log(`[EggCounterService] Iniciando: ${pythonBin} ${scriptArgs.join(' ')}`);
 
       const proc = spawn(pythonBin, scriptArgs);
