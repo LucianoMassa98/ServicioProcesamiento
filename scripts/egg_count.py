@@ -22,6 +22,17 @@ Salida (stdout): JSON  { eggs, processedFrames, processingTime }
 Errores (stderr): mensajes de diagnóstico
 """
 
+import os
+
+# Forzar 1 hilo en bibliotecas multihilo (OpenCV, OpenMP, BLAS) para evitar que
+# OpenCV cree decenas de hilos y asignaciones de memoria masivas en servidores
+# multinúcleo en la nube (Railway/Docker), provocando SIGKILL por OOM.
+os.environ['OMP_NUM_THREADS']        = '1'
+os.environ['OPENBLAS_NUM_THREADS']   = '1'
+os.environ['MKL_NUM_THREADS']        = '1'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS']    = '1'
+
 import sys
 import json
 import time
@@ -31,6 +42,9 @@ import gc
 
 import cv2
 import numpy as np
+
+# Limitar OpenCV a 1 hilo de procesamiento por instancia
+cv2.setNumThreads(1)
 
 
 # ─── Defaults (sobreescribibles por args) ─────────────────────────────────────
