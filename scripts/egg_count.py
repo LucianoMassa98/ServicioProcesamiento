@@ -137,6 +137,15 @@ def detect_egg_centroids(frame: np.ndarray,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+class Track:
+    __slots__ = ('cx', 'cy', 'frames', 'counted', 'lost')
+    def __init__(self, cx: int, cy: int):
+        self.cx      = cx
+        self.cy      = cy
+        self.frames  = 1
+        self.counted = False
+        self.lost    = 0
+
 class EggTracker:
     """
     Rastrea huevos entre frames usando nearest-neighbour greedy matching
@@ -151,7 +160,7 @@ class EggTracker:
         self.min_track_frames = min_track_frames
         self.max_lost_frames  = max_lost_frames
         self.warmup_frames    = warmup_frames
-        self.tracks: dict     = {}   # id → {cx, cy, frames, counted, lost}
+        self.tracks: dict     = {}   # id → Track
         self._next_id: int    = 0
         self.egg_count: int   = 0
 
@@ -162,7 +171,7 @@ class EggTracker:
         candidates = []
         for tid, track in self.tracks.items():
             for cidx, (cx, cy) in enumerate(centroids):
-                dist = math.hypot(cx - track['cx'], cy - track['cy'])
+                dist = math.hypot(cx - track.cx, cy - track.cy)
                 if dist <= self.max_dist:
                     candidates.append((dist, tid, cidx))
         candidates.sort()
@@ -173,36 +182,32 @@ class EggTracker:
             used_tracks.add(tid)
             used_centroids.add(cidx)
 
-            cx, cy   = centroids[cidx]
-            prev_cy  = self.tracks[tid]['cy']
+            cx, cy  = centroids[cidx]
+            track   = self.tracks[tid]
+            prev_cy = track.cy
 
-            self.tracks[tid]['cx']     = cx
-            self.tracks[tid]['cy']     = cy
-            self.tracks[tid]['frames'] += 1
-            self.tracks[tid]['lost']   = 0
+            track.cx     = cx
+            track.cy     = cy
+            track.frames += 1
+            track.lost   = 0
 
             # Dirección de abajo hacia arriba: prev_cy >= line_y > cy
-            if (not self.tracks[tid]['counted']
-                    and self.tracks[tid]['frames'] >= self.min_track_frames
+            if (not track.counted
+                    and track.frames >= self.min_track_frames
                     and prev_cy >= self.line_y > cy):
-                self.tracks[tid]['counted'] = True
+                track.counted = True
                 self.egg_count += 1
 
         for cidx, (cx, cy) in enumerate(centroids):
             if cidx not in used_centroids:
-                self.tracks[self._next_id] = {
-                    'cx': cx, 'cy': cy,
-                    'frames': 1,
-                    'counted': False,
-                    'lost': 0,
-                }
+                self.tracks[self._next_id] = Track(cx, cy)
                 self._next_id += 1
 
         to_delete = []
-        for tid, t in self.tracks.items():
+        for tid, track in self.tracks.items():
             if tid not in used_tracks:
-                t['lost'] += 1
-                if t['lost'] > self.max_lost_frames:
+                track.lost += 1
+                if track.lost > self.max_lost_frames:
                     to_delete.append(tid)
 
         for tid in to_delete:
@@ -220,10 +225,25 @@ def main():
               file=sys.stdout)
         sys.exit(1)
 
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    line_y = int(height * args.line_ratio)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    print(f'[egg_count] line_y={line_y}px  roi={args.roi_ratio:.2f}  video={args.video_path}',
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    orig_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    # Escalar cualquier video de alta resolución (1080p/4K) a un alto de 480px para garantizar bajo consumo de RAM
+    target_h = 480
+    need_resize = orig_height > target_h
+    if need_resize:
+        scale = target_h / float(orig_height)
+        effective_h = target_h
+        effective_w = int(orig_width * scale)
+    else:
+        effective_h = orig_height
+        effective_w = orig_width
+
+    line_y = int(effective_h * args.line_ratio)
+
+    print(f'[egg_count] line_y={line_y}px ({effective_w}x{effective_h})  roi={args.roi_ratio:.2f}  video={args.video_path}',
           file=sys.stderr)
 
     tracker = EggTracker(
@@ -236,7 +256,7 @@ def main():
 
     frame_idx  = 0
     processed  = 0
- 
+
     while True:
         frame_idx += 1
 
@@ -248,6 +268,9 @@ def main():
         ret, frame = cap.read()
         if not ret:
             break
+
+        if need_resize:
+            frame = cv2.resize(frame, (effective_w, effective_h), interpolation=cv2.INTER_AREA)
 
         centroids = detect_egg_centroids(
             frame,
