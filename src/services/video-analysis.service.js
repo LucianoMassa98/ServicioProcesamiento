@@ -10,10 +10,10 @@ const VideoAnalysis = require('../models/video-analysis.model');
  * Responsabilidad: orquestar el análisis completo de un video.
  *
  * Flujo:
- *  1. Delega el conteo al EggCounterService (inyectado por constructor).
- *  2. Elimina el archivo temporal independientemente del resultado.
- *  3. Persiste únicamente el resultado en la base de datos.
- *  4. Retorna el registro creado.
+ *  1. Crea el registro de análisis en DB antes de iniciar el procesamiento.
+ *  2. Delega el conteo al EggCounterService (inyectado por constructor).
+ *  3. Actualiza el estado y las métricas del registro según el resultado.
+ *  4. Elimina el archivo temporal independientemente del resultado.
  *
  * Principio de Inversión de Dependencias (DIP):
  *  Recibe EggCounterService por inyección de dependencias, lo que permite
@@ -37,26 +37,40 @@ class VideoAnalysisService {
    * @param {string} params.name       - Nombre descriptivo del análisis.
    * @returns {Promise<VideoAnalysis>} Registro creado en la base de datos.
    */
-  async analyze({ videoPath, galponId, name }) {
-    let countResult;
-
-    try {
-      // Ejecutar conteo de huevos
-      countResult = await this.eggCounterService.countEggs(videoPath);
-    } finally {
-      // Garantizar eliminación del temporal incluso si el análisis falla
-      await this._deleteTemporaryFile(videoPath);
-    }
-
-    // Persistir resultado (sin ruta de video)
-    const record = await VideoAnalysis.create({
+  async createPendingAnalysis({ galponId, name }) {
+    return VideoAnalysis.create({
       galponId,
       name,
-      eggs: countResult.eggs,
-      processedFrames: countResult.processedFrames,
-      processingTime: countResult.processingTime,
-      status: 'completed',
+      status: 'processing',
     });
+  }
+
+  async analyze({ videoPath, analysisId }) {
+    const record = await VideoAnalysis.findByPk(analysisId);
+    if (!record) {
+      throw new Error(`No se encontró el análisis con id "${analysisId}" para actualizar.`);
+    }
+
+    let countResult;
+    try {
+      countResult = await this.eggCounterService.countEggs(videoPath);
+      await record.update({
+        eggs: countResult.eggs,
+        processedFrames: countResult.processedFrames,
+        processingTime: countResult.processingTime,
+        status: 'completed',
+      });
+    } catch (error) {
+      await record.update({ status: 'failed' }).catch((updateError) => {
+        console.error(
+          '[VideoAnalysisService] No se pudo actualizar el estado a failed:',
+          updateError.message
+        );
+      });
+      throw error;
+    } finally {
+      await this._deleteTemporaryFile(videoPath);
+    }
 
     return record;
   }

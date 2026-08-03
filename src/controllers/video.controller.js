@@ -1,6 +1,7 @@
 'use strict';
 
 const { validationResult } = require('express-validator');
+const fs = require('fs/promises');
 const VideoAnalysisService = require('../services/video-analysis.service');
 
 const videoAnalysisService = new VideoAnalysisService();
@@ -45,19 +46,24 @@ class VideoController {
       const { name, galponId } = req.body;
       const videoPath = req.file.path;
 
+      // Crear el registro antes de procesar para que siempre quede trazabilidad en DB.
+      const analysisRecord = await videoAnalysisService.createPendingAnalysis({ galponId, name });
+
       // ─── Respuesta inmediata ───────────────────────────────────────────
-      // El análisis es costoso (Python + OpenCV). Respondemos de inmediato
-      // y dejamos que el procesamiento ocurra en segundo plano.
       res.status(200).json({
         success: true,
         message: 'Video recibido. El análisis está en proceso.',
+        analysisId: analysisRecord.id,
       });
 
       // ─── Análisis en background (fire-and-forget) ──────────────────────
-      videoAnalysisService.analyze({ videoPath, galponId, name }).catch((err) => {
+      videoAnalysisService.analyze({ videoPath, analysisId: analysisRecord.id }).catch((err) => {
         console.error('[VideoController] Error en análisis en background:', err.message);
       });
     } catch (error) {
+      if (req.file?.path) {
+        await fs.unlink(req.file.path).catch(() => {});
+      }
       next(error);
     }
   }
