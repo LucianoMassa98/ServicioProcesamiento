@@ -36,13 +36,45 @@ function fileFilter(_req, file, callback) {
   callback(null, true);
 }
 
+const fs = require('fs');
+
+// ─── Directorio temporal local (evita usar /tmp en RAM en Docker) ───────────
+const TEMP_DIR = path.resolve(__dirname, '../../tmp');
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
+
 /**
- * Almacenamiento temporal en /tmp del sistema operativo.
- * El archivo se elimina manualmente tras el análisis.
+ * Limpia archivos temporales antiguos (> 10 minutos) que hayan quedado abandonados.
+ */
+function cleanStaleTempFiles() {
+  try {
+    const files = fs.readdirSync(TEMP_DIR);
+    const now = Date.now();
+    for (const file of files) {
+      if (file.startsWith('egg-video-')) {
+        const filePath = path.join(TEMP_DIR, file);
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > 10 * 60 * 1000) {
+          fs.unlinkSync(filePath);
+          console.log(`[UploadMiddleware] Limpieza de archivo huérfano: ${file}`);
+        }
+      }
+    }
+  } catch (err) {
+    // Ignorar errores menores en limpieza
+  }
+}
+cleanStaleTempFiles();
+
+/**
+ * Almacenamiento temporal en directorio local ./tmp.
+ * El archivo se elimina automáticamente tras el análisis.
  */
 const storage = multer.diskStorage({
   destination: (_req, _file, callback) => {
-    callback(null, os.tmpdir());
+    cleanStaleTempFiles();
+    callback(null, TEMP_DIR);
   },
   filename: (_req, file, callback) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;

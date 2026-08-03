@@ -27,6 +27,7 @@ import json
 import time
 import math
 import argparse
+import gc
 
 import cv2
 import numpy as np
@@ -77,6 +78,13 @@ def parse_args():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+DILATE_KERNELS = {}
+
+def get_dilate_kernel(peak_window: int) -> np.ndarray:
+    if peak_window not in DILATE_KERNELS:
+        DILATE_KERNELS[peak_window] = np.ones((peak_window, peak_window), np.uint8)
+    return DILATE_KERNELS[peak_window]
+
 def detect_egg_centroids(frame: np.ndarray,
                          roi_ratio: float = ROI_WIDTH_RATIO,
                          peak_window: int = DEFAULT_PEAK_WINDOW,
@@ -104,8 +112,8 @@ def detect_egg_centroids(frame: np.ndarray,
     dist = cv2.distanceTransform(mask_roi, cv2.DIST_L2, 5)
     dist_smooth = cv2.GaussianBlur(dist, (7, 7), 0)
 
-    # Supresión de no-máximos locales usando dilatación con kernel de tamaño peak_window
-    kernel = np.ones((peak_window, peak_window), np.uint8)
+    # Supresión de no-máximos locales usando dilatación con kernel preasignado
+    kernel = get_dilate_kernel(peak_window)
     local_max = cv2.dilate(dist_smooth, kernel)
 
     # Los picos locales son los máximos dentro de la ventana que superan el umbral de distancia
@@ -166,10 +174,6 @@ class EggTracker:
                 self.tracks[tid]['counted'] = True
                 self.egg_count += 1
 
-        for tid in list(self.tracks):
-            if tid not in used_tracks:
-                self.tracks[tid]['lost'] += 1
-
         for cidx, (cx, cy) in enumerate(centroids):
             if cidx not in used_centroids:
                 self.tracks[self._next_id] = {
@@ -180,10 +184,15 @@ class EggTracker:
                 }
                 self._next_id += 1
 
-        self.tracks = {
-            tid: t for tid, t in self.tracks.items()
-            if t['lost'] <= self.max_lost_frames
-        }
+        to_delete = []
+        for tid, t in self.tracks.items():
+            if tid not in used_tracks:
+                t['lost'] += 1
+                if t['lost'] > self.max_lost_frames:
+                    to_delete.append(tid)
+
+        for tid in to_delete:
+            del self.tracks[tid]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -231,6 +240,9 @@ def main():
         )
         tracker.update(centroids)
         processed += 1
+
+        if processed % 300 == 0:
+            gc.collect()
 
     cap.release()
 
