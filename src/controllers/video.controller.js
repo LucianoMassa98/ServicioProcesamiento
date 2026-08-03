@@ -57,6 +57,7 @@ class VideoController {
       });
 
       // ─── Análisis en background (fire-and-forget) ──────────────────────
+      console.log(`[VideoController] Iniciando análisis en background id=${analysisRecord.id}`);
       videoAnalysisService.analyze({ videoPath, analysisId: analysisRecord.id }).catch((err) => {
         console.error('[VideoController] Error en análisis en background:', err.message);
       });

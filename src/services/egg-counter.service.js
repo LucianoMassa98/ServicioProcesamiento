@@ -36,9 +36,24 @@ class EggCounterService {
    * Control de concurrencia: límite de análisis en paralelo para evitar sobrecarga de RAM/CPU.
    * Por defecto 1 análisis a la vez (modificable por variable de entorno MAX_CONCURRENT_ANALYSES).
    */
-  static MAX_CONCURRENCY = parseInt(process.env.MAX_CONCURRENT_ANALYSES || '1', 10);
   static activeCount = 0;
   static queue = [];
+
+  static get MAX_CONCURRENCY() {
+    const raw = process.env.MAX_CONCURRENT_ANALYSES;
+    const parsed = Number.parseInt(raw ?? '1', 10);
+
+    if (Number.isNaN(parsed) || parsed < 1) {
+      if (raw !== undefined) {
+        console.warn(
+          `[EggCounterService] MAX_CONCURRENT_ANALYSES inválido (${raw}), usando 1 en su lugar.`
+        );
+      }
+      return 1;
+    }
+
+    return parsed;
+  }
 
   /**
    * Procesa la cola de solicitudes pendientes respetando el límite de concurrencia.
@@ -98,6 +113,12 @@ class EggCounterService {
     });
   }
 
+  static get DEFAULT_PYTHON_TIMEOUT_MS() {
+    const raw = process.env.EGG_PROCESS_TIMEOUT_MS;
+    const parsed = Number.parseInt(raw ?? '180000', 10);
+    return Number.isNaN(parsed) || parsed < 1000 ? 180000 : parsed;
+  }
+
   /**
    * Ejecuta el script Python en un subproceso.
    *
@@ -108,6 +129,7 @@ class EggCounterService {
   async _runPythonCount(videoPath) {
     return new Promise((resolve, reject) => {
       const pythonBin = EggCounterService.resolvePythonBin();
+      const timeoutMs = EggCounterService.DEFAULT_PYTHON_TIMEOUT_MS;
 
       const scriptArgs = [
         EggCounterService.PYTHON_SCRIPT_PATH,
@@ -133,16 +155,25 @@ class EggCounterService {
       }
 
       console.log(`[EggCounterService] Iniciando: ${pythonBin} ${scriptArgs.join(' ')}`);
+      console.log(`[EggCounterService] Timeout máximo: ${timeoutMs}ms`);
 
       const proc = spawn(pythonBin, scriptArgs);
 
       let stdout = '';
       let stderr = '';
+      let timeout = setTimeout(() => {
+        if (!proc.killed) {
+          proc.kill();
+          reject(new Error(`egg_count.py excedió el timeout de ${timeoutMs} ms y fue terminado.`));
+        }
+      }, timeoutMs);
 
       proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
       proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
       proc.on('close', (code, signal) => {
+        clearTimeout(timeout);
+
         if (stderr.trim()) {
           console.log(`[EggCounterService] Script stderr:\n${stderr.trim()}`);
         }

@@ -51,6 +51,8 @@ class VideoAnalysisService {
       throw new Error(`No se encontró el análisis con id "${analysisId}" para actualizar.`);
     }
 
+    console.log(`[VideoAnalysisService] Iniciando análisis id=${analysisId} video=${videoPath}`);
+
     let countResult;
     try {
       countResult = await this.eggCounterService.countEggs(videoPath);
@@ -60,6 +62,7 @@ class VideoAnalysisService {
         processingTime: countResult.processingTime,
         status: 'completed',
       });
+      console.log(`[VideoAnalysisService] Análisis id=${analysisId} completado. eggs=${countResult.eggs} frames=${countResult.processedFrames} time=${countResult.processingTime}s`);
     } catch (error) {
       await record.update({ status: 'failed' }).catch((updateError) => {
         console.error(
@@ -67,6 +70,7 @@ class VideoAnalysisService {
           updateError.message
         );
       });
+      console.error(`[VideoAnalysisService] Error en análisis id=${analysisId}:`, error.message);
       throw error;
     } finally {
       await this._deleteTemporaryFile(videoPath);
