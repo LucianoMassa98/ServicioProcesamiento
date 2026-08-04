@@ -145,7 +145,7 @@ class EggCounterService {
         '--warmup-frames',    process.env.EGG_WARMUP_FRAMES           || '60',
         '--peak-window',      process.env.EGG_PEAK_WINDOW             || '19',
         '--min-peak-dist',    process.env.EGG_MIN_PEAK_DIST           || '9.5',
-        '--roi-ratio',        process.env.EGG_ROI_WIDTH_RATIO         || '0.78',
+        '--roi-ratio',        process.env.EGG_ROI_WIDTH_RATIO         || '1.00',
       ];
 
       if (global.gc) {

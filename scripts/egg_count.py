@@ -55,11 +55,10 @@ DEFAULT_SKIP_FRAMES      = 2      # procesar 1 de cada N frames
 DEFAULT_MAX_DIST         = 45     # distancia máxima px para asociar al mismo track
 DEFAULT_MIN_TRACK_FRAMES = 1      # frames mínimos rastreados antes de poder contar
 DEFAULT_MAX_LOST_FRAMES  = 6      # frames sin detección antes de eliminar track
-DEFAULT_ROI_WIDTH_RATIO  = 0.78   # fracción del ancho a procesar (excluye engranajes a la izquierda y riel metálico lateral a la derecha)
+DEFAULT_ROI_WIDTH_RATIO  = 1.00   # procesar el 100% del ancho del video
 DEFAULT_WARMUP_FRAMES    = 60     # frames iniciales de calentamiento
 DEFAULT_PEAK_WINDOW      = 19     # ventana para supresión de no-máximos en Distance Transform
 DEFAULT_MIN_PEAK_DIST    = 9.5    # umbral mínimo de Distance Transform (px a borde)
-
 
 # ─── Rango HSV para huevos naranja-marrones sobre fondo blanco ────────────────
 HSV_LOWER = np.array([ 5, 60,  40])
@@ -109,8 +108,13 @@ def detect_egg_centroids(frame: np.ndarray,
     Si Hough no encuentra círculos fiables, vuelve al método HSV+contornos.
     """
     h, w = frame.shape[:2]
-    roi_x1 = int(w * 0.08)
-    roi_x2 = int(w * roi_ratio)
+    if roi_ratio >= 0.99:
+        roi_x1 = 0
+        roi_x2 = w
+    else:
+        margin = (1.0 - roi_ratio) / 2.0
+        roi_x1 = int(w * margin)
+        roi_x2 = int(w * (1.0 - margin))
     roi = frame[:, roi_x1:roi_x2]
 
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
