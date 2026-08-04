@@ -87,6 +87,8 @@ def parse_args():
                    help='Umbral mínimo de Distance Transform para detectar centroides')
     p.add_argument('--roi-ratio',        type=float, default=DEFAULT_ROI_WIDTH_RATIO,
                    help='Fracción del ancho del frame a analizar (0.0-1.0)')
+    p.add_argument('--enable-auto-skip', action='store_true', default=False,
+                   help='Habilitar auto-skip agresivo de frames según la duración del video')
     return p.parse_args()
 
 
@@ -286,15 +288,14 @@ def main():
 
     line_y = int(effective_h * args.line_ratio)
 
-    if args.skip_frames == DEFAULT_SKIP_FRAMES and fps > 0:
+    enable_auto_skip = os.environ.get('ENABLE_AUTO_SKIP', '0') == '1' or args.enable_auto_skip
+    if enable_auto_skip and args.skip_frames == DEFAULT_SKIP_FRAMES and fps > 0:
         if total_seconds >= 240:
-            auto_skip = 12
+            auto_skip = 4
         elif total_seconds >= 180:
-            auto_skip = 10
-        elif total_seconds >= 120:
-            auto_skip = 8
+            auto_skip = 3
         else:
-            auto_skip = 6
+            auto_skip = 2
 
         if auto_skip > args.skip_frames:
             print(
@@ -304,18 +305,23 @@ def main():
             )
             args.skip_frames = auto_skip
 
+    # Ajustar max_dist y warmup_frames proporcionalmente si skip_frames es mayor a 2
+    effective_max_dist = args.max_dist * (args.skip_frames / 2.0) if args.skip_frames > 2 else args.max_dist
+    effective_warmup_frames = max(1, int(args.warmup_frames / max(1, args.skip_frames)))
+
     print(
         f'[egg_count] line_y={line_y}px ({effective_w}x{effective_h}) fps={fps:.1f} ' +
-        f'frames={total_frames} duracion={total_seconds:.1f}s skip={args.skip_frames} roi={args.roi_ratio:.2f} video={args.video_path}',
+        f'frames={total_frames} duracion={total_seconds:.1f}s skip={args.skip_frames} ' +
+        f'max_dist={effective_max_dist:.1f} warmup={effective_warmup_frames} roi={args.roi_ratio:.2f} video={args.video_path}',
         file=sys.stderr
     )
 
     tracker = EggTracker(
         line_y           = line_y,
-        max_dist         = args.max_dist,
+        max_dist         = effective_max_dist,
         min_track_frames = args.min_track_frames,
         max_lost_frames  = args.max_lost_frames,
-        warmup_frames    = args.warmup_frames,
+        warmup_frames    = effective_warmup_frames,
     )
 
     frame_idx  = 0
