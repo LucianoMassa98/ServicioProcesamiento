@@ -100,40 +100,75 @@ def get_dilate_kernel(peak_window: int) -> np.ndarray:
 
 def detect_egg_centroids(frame: np.ndarray,
                          roi_ratio: float = ROI_WIDTH_RATIO,
-                         peak_window: int = DEFAULT_PEAK_WINDOW,
-                         min_peak_dist: float = DEFAULT_MIN_PEAK_DIST) -> list:
+                         min_area: int = DEFAULT_MIN_AREA,
+                         max_area: int = DEFAULT_MAX_AREA) -> list:
     """
-    Detecta centroides de huevos usando Distance Transform + Supresión de No-Máximos sobre el ROI de la cinta.
-    Excluye bordes laterales (engranajes a la izquierda y rieles metálicos a la derecha).
+    Detecta centroides de huevos usando HoughCircles sobre el ROI del frame.
+    Si Hough no encuentra círculos fiables, vuelve al método HSV+contornos.
     """
     h, w = frame.shape[:2]
-    x1 = int(w * 0.08)
-    x2 = int(w * roi_ratio)
-    roi = frame[:, x1:x2]
+    roi_x1 = int(w * 0.08)
+    roi_x2 = int(w * roi_ratio)
+    roi = frame[:, roi_x1:roi_x2]
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
+
+    min_dist = max(12, int(math.sqrt(min_area) * 1.2))
+    max_radius = min(32, int(math.sqrt(max_area / math.pi)))
+
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.1,
+        minDist=min_dist,
+        param1=80,
+        param2=16,
+        minRadius=6,
+        maxRadius=max_radius,
+    )
+
+    centroids = []
+    if circles is not None:
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        for cx, cy, _ in np.round(circles[0]).astype(int):
+            if cx < 0 or cy < 0 or cx >= roi.shape[1] or cy >= roi.shape[0]:
+                continue
+
+            y0 = max(cy - 3, 0)
+            y1 = min(cy + 3, roi.shape[0] - 1)
+            x0 = max(cx - 3, 0)
+            x1 = min(cx + 3, roi.shape[1] - 1)
+            patch = hsv[y0:y1 + 1, x0:x1 + 1]
+            if patch.size == 0:
+                continue
+
+            avg_h, avg_s, avg_v = np.mean(patch.reshape(-1, 3), axis=0)
+            if 5 <= avg_h <= 25 and 60 <= avg_s <= 240 and 40 <= avg_v <= 220:
+                centroids.append((cx + roi_x1, cy))
+
+    if centroids:
+        return centroids
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask_roi = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
-
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
     mask_roi = cv2.morphologyEx(mask_roi, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
+    mask_roi = cv2.dilate(mask_roi, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
 
-    # Transformada de distancia sobre la máscara recortada del ROI
-    dist = cv2.distanceTransform(mask_roi, cv2.DIST_L2, 5)
-    dist_smooth = cv2.GaussianBlur(dist, (7, 7), 0)
-    del dist
+    contours, _ = cv2.findContours(mask_roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area or area > max_area:
+            continue
+        M = cv2.moments(contour)
+        if M['m00'] == 0:
+            continue
+        cx = int(M['m10'] / M['m00']) + roi_x1
+        cy = int(M['m01'] / M['m00'])
+        centroids.append((cx, cy))
 
-    # Supresión de no-máximos locales usando dilatación con kernel preasignado
-    kernel = get_dilate_kernel(peak_window)
-    local_max = cv2.dilate(dist_smooth, kernel)
-
-    # Los picos locales son los máximos dentro de la ventana que superan el umbral de distancia
-    peaks_mask = (dist_smooth == local_max) & (dist_smooth >= min_peak_dist)
-    del dist_smooth, local_max
-
-    ys, xs = np.where(peaks_mask)
-    del peaks_mask
-
-    return [(x + x1, y) for x, y in zip(xs, ys)]
+    return centroids
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -238,8 +273,8 @@ def main():
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     total_seconds = total_frames / fps if fps > 0 else 0
 
-    # Escalar cualquier video de alta resolución (1080p/4K) a un alto moderado para reducir uso de RAM.
-    target_h = 360
+    # Escalar videos largos a una altura menor para reducir uso de CPU/RAM.
+    target_h = 240 if total_seconds >= 240 else 360
     need_resize = orig_height > target_h
     if need_resize:
         scale = target_h / float(orig_height)
@@ -252,9 +287,21 @@ def main():
     line_y = int(effective_h * args.line_ratio)
 
     if args.skip_frames == DEFAULT_SKIP_FRAMES and fps > 0:
-        auto_skip = min(8, max(2, int(round(fps / 6))))
+        if total_seconds >= 240:
+            auto_skip = 12
+        elif total_seconds >= 180:
+            auto_skip = 10
+        elif total_seconds >= 120:
+            auto_skip = 8
+        else:
+            auto_skip = 6
+
         if auto_skip > args.skip_frames:
-            print(f'[egg_count] Ajustando skip_frames de {args.skip_frames} a {auto_skip} según fps={fps:.1f}', file=sys.stderr)
+            print(
+                f'[egg_count] Ajustando skip_frames de {args.skip_frames} a {auto_skip} ' +
+                f'según duracion={total_seconds:.1f}s fps={fps:.1f}',
+                file=sys.stderr
+            )
             args.skip_frames = auto_skip
 
     print(
@@ -292,8 +339,8 @@ def main():
         centroids = detect_egg_centroids(
             frame,
             roi_ratio=args.roi_ratio,
-            peak_window=args.peak_window,
-            min_peak_dist=args.min_peak_dist,
+            min_area=args.min_area,
+            max_area=args.max_area,
         )
         tracker.update(centroids)
         processed += 1

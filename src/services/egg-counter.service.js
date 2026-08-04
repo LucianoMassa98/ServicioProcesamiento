@@ -115,8 +115,15 @@ class EggCounterService {
 
   static get DEFAULT_PYTHON_TIMEOUT_MS() {
     const raw = process.env.EGG_PROCESS_TIMEOUT_MS;
-    const parsed = Number.parseInt(raw ?? '600000', 10);
-    return Number.isNaN(parsed) || parsed < 1000 ? 600000 : parsed;
+    const parsed = Number.parseInt(raw ?? '120000', 10);
+    const timeout = Number.isNaN(parsed) || parsed < 1000 ? 120000 : parsed;
+    if (timeout > 120000) {
+      console.warn(
+        `[EggCounterService] EGG_PROCESS_TIMEOUT_MS demasiado alto (${timeout}ms). Se usará el máximo permitido de 120000ms.`
+      );
+      return 120000;
+    }
+    return timeout;
   }
 
   /**
