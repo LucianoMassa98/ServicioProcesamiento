@@ -66,17 +66,17 @@ class EggCounterService {
       const scriptArgs = [
         EggCounterService.PYTHON_SCRIPT_PATH,
         videoPath,
-        '--line-ratio',       process.env.EGG_COUNTING_LINE_RATIO    || '0.65',
-        '--min-area',         process.env.EGG_MIN_AREA                || '150',
-        '--max-area',         process.env.EGG_MAX_AREA                || '12000',
+        '--line-ratio',       process.env.EGG_COUNTING_LINE_RATIO    || '0.50',
         '--skip-frames',      process.env.EGG_PROCESS_EVERY_N_FRAMES  || '2',
         '--max-dist',         process.env.EGG_MAX_CENTROID_DIST       || '45',
-        '--min-track-frames', process.env.EGG_MIN_TRACK_FRAMES        || '1',
+        '--min-track-frames', process.env.EGG_MIN_TRACK_FRAMES        || '3',
         '--max-lost-frames',  process.env.EGG_MAX_LOST_FRAMES         || '6',
-        '--warmup-frames',    process.env.EGG_WARMUP_FRAMES           || '60',
+        '--warmup-frames',    process.env.EGG_WARMUP_FRAMES           || '45',
         '--peak-window',      process.env.EGG_PEAK_WINDOW             || '19',
-        '--min-peak-dist',    process.env.EGG_MIN_PEAK_DIST           || '9.5',
-        '--roi-ratio',        process.env.EGG_ROI_WIDTH_RATIO         || '0.85',
+        '--min-peak-dist',    process.env.EGG_MIN_PEAK_DIST           || '12',
+        '--x-margin',         process.env.EGG_X_MARGIN                || '25',
+        '--direction',        process.env.EGG_DIRECTION               || 'up',
+        '--min-travel',       process.env.EGG_MIN_TRAVEL              || '40',
       ];
 
       console.log(`[EggCounterService] Iniciando: ${pythonBin} ${scriptArgs.join(' ')}`);

@@ -3,19 +3,17 @@
 egg_count_debug.py  –  Versión de debug del contador de huevos.
 
 Genera un video anotado con:
-  - Contornos verdes sobre los huevos detectados
-  - Punto rojo en el centroide de cada detección
-  - ID de track y estado (activo / contado)
+  - Centroides detectados (rojo = activo, amarillo = contado)
+  - ID de track y estado
   - Línea de conteo horizontal en azul
   - Contador total en la esquina superior izquierda
 
 Uso:
-  python scripts/egg_count_debug.py prueba/prueba.mp4
-  python scripts/egg_count_debug.py prueba/prueba.mp4 --out prueba/debug_out.mp4
+  python scripts/egg_count_debug.py prueba/2026-08-02_09-00-18.mp4
+  python scripts/egg_count_debug.py prueba/2026-08-02_09-00-18.mp4 --out prueba/debug_out.mp4
 """
 
 import sys
-import math
 import argparse
 
 import cv2
@@ -24,11 +22,14 @@ import numpy as np
 # ─── Importar lógica del script principal ─────────────────────────────────────
 sys.path.insert(0, 'scripts')
 from egg_count import (
-    build_egg_mask, separate_blobs_watershed, detect_egg_centroids,
+    detect_egg_centroids,
     EggTracker,
     DEFAULT_LINE_RATIO, DEFAULT_MIN_AREA, DEFAULT_MAX_AREA,
     DEFAULT_SKIP_FRAMES, DEFAULT_MAX_DIST,
     DEFAULT_MIN_TRACK_FRAMES, DEFAULT_MAX_LOST_FRAMES,
+    DEFAULT_WARMUP_FRAMES, DEFAULT_PEAK_WINDOW, DEFAULT_MIN_PEAK_DIST,
+    DEFAULT_ROI_WIDTH_RATIO, DEFAULT_DIRECTION,
+    HSV_LOWER, HSV_UPPER, MORPH_KERNEL,
 )
 
 # ─── Colores BGR ──────────────────────────────────────────────────────────────
@@ -44,12 +45,17 @@ def parse_args():
     p.add_argument('video_path')
     p.add_argument('--out',              default=None,                  help='Ruta de salida del video anotado')
     p.add_argument('--line-ratio',       type=float, default=DEFAULT_LINE_RATIO)
-    p.add_argument('--min-area',         type=int,   default=DEFAULT_MIN_AREA)
-    p.add_argument('--max-area',         type=int,   default=DEFAULT_MAX_AREA)
     p.add_argument('--skip-frames',      type=int,   default=DEFAULT_SKIP_FRAMES)
     p.add_argument('--max-dist',         type=float, default=DEFAULT_MAX_DIST)
     p.add_argument('--min-track-frames', type=int,   default=DEFAULT_MIN_TRACK_FRAMES)
     p.add_argument('--max-lost-frames',  type=int,   default=DEFAULT_MAX_LOST_FRAMES)
+    p.add_argument('--warmup-frames',    type=int,   default=DEFAULT_WARMUP_FRAMES)
+    p.add_argument('--peak-window',      type=int,   default=DEFAULT_PEAK_WINDOW)
+    p.add_argument('--min-peak-dist',    type=float, default=DEFAULT_MIN_PEAK_DIST)
+    p.add_argument('--roi-ratio',        type=float, default=DEFAULT_ROI_WIDTH_RATIO)
+    p.add_argument('--direction',        type=str,   default=DEFAULT_DIRECTION,
+                   choices=['up', 'down'],
+                   help='Dirección del movimiento: up (abajo→arriba) o down (arriba→abajo)')
     return p.parse_args()
 
 
@@ -84,6 +90,21 @@ def draw_overlay(frame, tracker, line_y, egg_count, frame_idx):
     return frame
 
 
+def draw_detection_contours(frame, roi_ratio):
+    """Dibuja contornos verdes sobre la máscara HSV de detección."""
+    h, w = frame.shape[:2]
+    roi_w = int(w * roi_ratio)
+    roi = frame[:, :roi_w]
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  MORPH_KERNEL, iterations=1)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(frame, contours, -1, COLOR_CONTOUR, 2)
+
+
 def main():
     args = parse_args()
 
@@ -106,12 +127,19 @@ def main():
         (width, height),
     )
 
-    tracker   = EggTracker(line_y, args.max_dist, args.min_track_frames, args.max_lost_frames)
+    tracker = EggTracker(
+        line_y           = line_y,
+        max_dist         = args.max_dist,
+        min_track_frames = args.min_track_frames,
+        max_lost_frames  = args.max_lost_frames,
+        warmup_frames    = args.warmup_frames,
+        direction        = args.direction,
+    )
     frame_idx = 0
     processed = 0
 
     print(f'Procesando {args.video_path}  ({width}x{height} @ {fps:.1f}fps, {total} frames)')
-    print(f'Línea de conteo: y={line_y}px  |  salida: {out_path}')
+    print(f'Línea de conteo: y={line_y}px  |  dirección: {args.direction}  |  salida: {out_path}')
 
     while True:
         ret, frame = cap.read()
@@ -123,22 +151,16 @@ def main():
             continue
 
         # Detectar y actualizar tracker
-        centroids = detect_egg_centroids(frame, args.min_area, args.max_area)
+        centroids = detect_egg_centroids(
+            frame,
+            roi_ratio=args.roi_ratio,
+            peak_window=args.peak_window,
+            min_peak_dist=args.min_peak_dist,
+        )
         tracker.update(centroids)
 
-        # Dibujar contornos sobre la máscara
-        mask    = build_egg_mask(frame)
-        markers = separate_blobs_watershed(frame, mask)
-        for label in np.unique(markers):
-            if label <= 1:
-                continue
-            component = np.zeros(mask.shape, dtype=np.uint8)
-            component[markers == label] = 255
-            area = cv2.countNonZero(component)
-            if not (args.min_area <= area <= args.max_area):
-                continue
-            contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(frame, contours, -1, COLOR_CONTOUR, 2)
+        # Dibujar contornos de detección
+        draw_detection_contours(frame, args.roi_ratio)
 
         # Superponer información
         frame = draw_overlay(frame, tracker, line_y, tracker.egg_count, frame_idx)
