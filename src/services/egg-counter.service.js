@@ -73,10 +73,10 @@ class EggCounterService {
         '--max-lost-frames',  process.env.EGG_MAX_LOST_FRAMES         || '6',
         '--warmup-frames',    process.env.EGG_WARMUP_FRAMES           || '30',
         '--peak-window',      process.env.EGG_PEAK_WINDOW             || '13',
-        '--min-peak-dist',    process.env.EGG_MIN_PEAK_DIST           || '11.5',
+        '--min-peak-dist',    process.env.EGG_MIN_PEAK_DIST           || '11.0',
         '--x-margin',         process.env.EGG_X_MARGIN                || '20',
         '--direction',        process.env.EGG_DIRECTION               || 'up',
-        '--min-travel',       process.env.EGG_MIN_TRAVEL              || '22',
+        '--min-travel',       process.env.EGG_MIN_TRAVEL              || '20',
       ];
 
       console.log(`[EggCounterService] Iniciando: ${pythonBin} ${scriptArgs.join(' ')}`);

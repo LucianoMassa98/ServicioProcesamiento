@@ -47,10 +47,10 @@ DEFAULT_MIN_TRACK_FRAMES = 3      # frames minimos rastreados antes de poder con
 DEFAULT_MAX_LOST_FRAMES  = 6      # frames sin deteccion antes de eliminar track
 DEFAULT_WARMUP_FRAMES    = 30     # frames iniciales de calentamiento (no se cuenta)
 DEFAULT_PEAK_WINDOW      = 13     # ventana para supresion de no-maximos en Distance Transform
-DEFAULT_MIN_PEAK_DIST    = 11.5   # umbral minimo de Distance Transform (px a borde)
+DEFAULT_MIN_PEAK_DIST    = 11.0   # umbral minimo de Distance Transform (px a borde)
 DEFAULT_X_MARGIN         = 20     # pixeles a recortar de cada lado (excluir maquinaria del borde)
 DEFAULT_DIRECTION        = 'up'   # direccion del movimiento de huevos
-DEFAULT_MIN_TRAVEL       = 22     # distancia minima (px) que un track debe recorrer desde su posicion inicial
+DEFAULT_MIN_TRAVEL       = 20     # distancia minima (px) que un track debe recorrer desde su posicion inicial
 
 
 # --- Rango HSV para huevos naranja-marrones ---
