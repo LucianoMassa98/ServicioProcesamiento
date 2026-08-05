@@ -1,7 +1,9 @@
 'use strict';
 
-const express    = require('express');
-const morgan     = require('morgan');
+const express = require('express');
+const morgan = require('morgan');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 const videoRoutes = require('./routes/video.routes');
 const { errorHandler } = require('./middlewares/error.middleware');
 
@@ -15,6 +17,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 // ─── Parsers ─────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ─── Documentación Swagger UI ────────────────────────────────────────────────
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ─── Rutas ───────────────────────────────────────────────────────────────────
 app.use('/api/videos', videoRoutes);

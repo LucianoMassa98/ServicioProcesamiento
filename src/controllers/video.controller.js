@@ -61,6 +61,87 @@ class VideoController {
       next(error);
     }
   }
+
+  /**
+   * GET /api/videos/consolidated
+   *
+   * Retorna información consolidada por día y galpón (cantidad total de huevos).
+   *
+   * @param {import('express').Request} req
+   * @param {import('express').Response} res
+   * @param {import('express').NextFunction} next
+   */
+  async getConsolidated(req, res, next) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Parámetros de búsqueda inválidos.',
+          errors: errors.array().map((e) => ({ field: e.path, message: e.msg })),
+        });
+      }
+
+      const { galponId, date, startDate, endDate } = req.query;
+
+      const data = await videoAnalysisService.getConsolidatedByDay({
+        galponId,
+        date,
+        startDate,
+        endDate,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/videos/records
+   *
+   * Retorna registros de análisis en formato [archivo, cnthuevos, createdAt, updatedAt]
+   * u objetos correspondientes.
+   *
+   * @param {import('express').Request} req
+   * @param {import('express').Response} res
+   * @param {import('express').NextFunction} next
+   */
+  async getRecords(req, res, next) {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Parámetros de búsqueda inválidos.',
+          errors: errors.array().map((e) => ({ field: e.path, message: e.msg })),
+        });
+      }
+
+      const { galponId, date, startDate, endDate, limit, offset, format } = req.query;
+
+      const result = await videoAnalysisService.getFileRecords({
+        galponId,
+        date,
+        startDate,
+        endDate,
+        limit,
+        offset,
+        format,
+      });
+
+      return res.status(200).json({
+        success: true,
+        total: result.total,
+        data: result.data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new VideoController();
