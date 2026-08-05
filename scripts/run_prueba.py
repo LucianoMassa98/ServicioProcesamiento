@@ -16,13 +16,13 @@ import time
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 PRUEBA_DIR   = os.path.join(os.path.dirname(__file__), '..', 'prueba')
-CONTEO_FILE  = os.path.join(PRUEBA_DIR, 'conteo-realizado.txt')
+CONTEO_FILE  = os.path.join(PRUEBA_DIR, 'conteo-manual.txt')
 SCRIPT_PATH  = os.path.join(os.path.dirname(__file__), 'egg_count.py')
 PYTHON_BIN   = os.environ.get('PYTHON_BIN', 'python')
 
 
 def load_expected_counts():
-    """Carga el archivo conteo-realizado.txt → dict {filename: count}"""
+    """Carga el archivo conteo-manual.txt → dict {filename: count}"""
     expected = {}
     with open(CONTEO_FILE, 'r') as f:
         for line in f:
@@ -42,8 +42,13 @@ def run_egg_count(video_path):
         PYTHON_BIN, SCRIPT_PATH, video_path,
         '--direction', 'up',
         '--line-ratio', '0.50',
-        '--x-margin', '25',
-        '--min-travel', '40',
+        '--skip-frames', '1',
+        '--x-margin', '20',
+        '--min-travel', '22',
+        '--min-peak-dist', '11.5',
+        '--peak-window', '13',
+        '--max-dist', '30',
+        '--warmup-frames', '30',
     ]
 
     result = subprocess.run(
